@@ -17,16 +17,16 @@ async function authRoutes(fastify) {
     schema: {
       body: {
         type: 'object',
-        required: ['email', 'password'],
+        required: ['usuario', 'password'],
         properties: {
-          email:    { type: 'string', format: 'email' },
+          usuario:  { type: 'string' },
           password: { type: 'string', minLength: 6 },
         },
       },
     },
   }, async (request, reply) => {
-    const { email, password } = request.body
-    const result = await authService.login(fastify, email, password)
+    const { usuario, password } = request.body
+    const result = await authService.login(fastify, usuario, password)
     return reply.code(200).send(result)
   })
 

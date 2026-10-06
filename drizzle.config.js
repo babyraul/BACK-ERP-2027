@@ -1,7 +1,7 @@
-import { defineConfig } from 'drizzle-kit'
-import 'dotenv/config'
+const { defineConfig } = require('drizzle-kit');
+require('dotenv').config();
 
-export default defineConfig({
+module.exports = defineConfig({
   schema:    './src/db/schema.js',
   out:       './src/db/migrations',
   dialect:   'postgresql',
@@ -10,4 +10,4 @@ export default defineConfig({
   },
   verbose:   true,
   strict:    true,
-})
+});
