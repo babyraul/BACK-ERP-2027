@@ -1,24 +1,8 @@
 -- db-seed.sql
 -- Archivo de inicialización de datos básicos (Seed)
-
--- 1. Creación del Super Administrador inicial
--- Nota: La contraseña está hasheada. Si usas bcrypt, asegúrate de generar el hash de la contraseña deseada.
-INSERT INTO usuarios (
-    id, 
-    nombre, 
-    usuario, 
-    password, 
-    activo, 
-    es_super_admin, 
-    current_session_id
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'Super Administrador',
-    'master',
-    '$2b$10$./buNCeaHarklxK2XC4NduGXUbYchAWmuCHIg3zdGJrmZMmA89yrO',
-    true,
-    true,
-    'init_session_master'
+INSERT INTO usuarios ( id, nombre, usuario, password, activo, es_super_admin, current_session_id) VALUES (
+    '00000000-0000-0000-0000-000000000001', 'Super Administrador','master','$2b$10$./buNCeaHarklxK2XC4NduGXUbYchAWmuCHIg3zdGJrmZMmA89yrO',
+    true, true,'init_session_master'
 ) ON CONFLICT (usuario) DO NOTHING;
 
 INSERT INTO tipo_afectacion_igv
@@ -335,7 +319,7 @@ ON CONFLICT DO NOTHING;
 
 
 
-INSERT INTO public.ubigeo
+INSERT INTO ubigeo
 (codigo, departamento, provincia, distrito)
 VALUES
 ('250401', 'UCAYALI', 'PURUS', 'PURUS'),
