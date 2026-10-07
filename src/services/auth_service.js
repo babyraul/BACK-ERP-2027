@@ -173,4 +173,4 @@ function buildTree(items) {
   return rootItems
 }
 
-module.exports = { login, refresh, logout, getMe, getUserMenu }
+module.exports = { login, refresh, logout, getMe, getUserMenu, buildTree }
