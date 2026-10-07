@@ -1,6 +1,6 @@
 'use strict'
 
-const authService = require('../services/auth.service')
+const authService = require('../services/auth_service')
 
 /**
  * Rutas de autenticación
