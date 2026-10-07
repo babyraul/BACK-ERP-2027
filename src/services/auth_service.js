@@ -95,7 +95,7 @@ async function getUserMenu(fastify, userId, activeEmpresaId, esSuperAdmin) {
   // If Super Admin, they can see all active modules
   if (esSuperAdmin) {
     const rows = await db.execute(sql`
-      SELECT id, padre_id, codigo, nombre, descripcion, ruta, tipo, orden
+      SELECT id, padre_id, codigo, nombre, descripcion, ruta, tipo, orden, icon
       FROM modulos
       WHERE activo = true
       ORDER BY orden ASC
@@ -109,7 +109,7 @@ async function getUserMenu(fastify, userId, activeEmpresaId, esSuperAdmin) {
   const rows = await db.execute(sql`
     WITH RECURSIVE module_tree AS (
       -- Get modules the user has permissions for
-      SELECT m.id, m.padre_id, m.codigo, m.nombre, m.descripcion, m.ruta, m.tipo, m.orden
+      SELECT m.id, m.padre_id, m.codigo, m.nombre, m.descripcion, m.ruta, m.tipo, m.orden, m.icon
       FROM modulos m
       INNER JOIN permisos p ON p.modulo_id = m.id
       INNER JOIN rol_permisos rp ON rp.permiso_id = p.id
@@ -122,7 +122,7 @@ async function getUserMenu(fastify, userId, activeEmpresaId, esSuperAdmin) {
       UNION
       
       -- Add parent modules to complete the tree
-      SELECT m.id, m.padre_id, m.codigo, m.nombre, m.descripcion, m.ruta, m.tipo, m.orden
+      SELECT m.id, m.padre_id, m.codigo, m.nombre, m.descripcion, m.ruta, m.tipo, m.orden, m.icon
       FROM modulos m
       INNER JOIN module_tree mt ON m.id = mt.padre_id
       WHERE m.activo = true

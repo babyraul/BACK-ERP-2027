@@ -1,0 +1,1 @@
+ALTER TABLE "modulos" ADD COLUMN "icon" varchar(50);

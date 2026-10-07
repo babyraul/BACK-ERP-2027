@@ -15,6 +15,13 @@
       "when": 1791385434871,
       "tag": "0001_shiny_epoch",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791412773901,
+      "tag": "0002_superb_red_shift",
+      "breakpoints": true
     }
   ]
 }

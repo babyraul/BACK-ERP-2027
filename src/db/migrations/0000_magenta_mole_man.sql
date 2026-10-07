@@ -1,6 +1,5 @@
 -- Current sql file was generated after introspecting the database
 -- If you want to run this migration please uncomment this code before executing migrations
-/*
 CREATE TABLE IF NOT EXISTS "ubigeo" (
 	"codigo" varchar(6) PRIMARY KEY NOT NULL,
 	"departamento" varchar(100) NOT NULL,
@@ -1392,4 +1391,3 @@ CREATE INDEX IF NOT EXISTS "idx_codigos_detraccion_sunat_activo" ON "tipo_codigo
 CREATE INDEX IF NOT EXISTS "idx_empresas_ruc" ON "empresas" USING btree ("ruc" text_ops);--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_sucursales_empresa_id" ON "sucursales" USING btree ("empresa_id" uuid_ops);--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_sucursales_ruc" ON "sucursales" USING btree ("ruc" text_ops);
-*/

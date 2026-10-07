@@ -23,6 +23,12 @@ class GenericService {
       q = q.where(and(...conditions))
     }
 
+    // Default sorting by created_at DESC if the column exists
+    if (this.table.created_at) {
+      const { desc } = require('drizzle-orm')
+      q = q.orderBy(desc(this.table.created_at))
+    }
+
     return q
   }
 

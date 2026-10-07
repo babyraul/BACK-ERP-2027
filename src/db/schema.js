@@ -519,6 +519,7 @@ const modulos = (0, import_pg_core.pgTable)(
     ruta: (0, import_pg_core.varchar)("ruta", { length: 255 }),
     tipo: (0, import_pg_core.varchar)("tipo", { length: 50 }).default('MODULO').notNull(),
     orden: (0, import_pg_core.integer)("orden").default(0).notNull(),
+    icon: (0, import_pg_core.varchar)("icon", { length: 50 }),
     activo: (0, import_pg_core.boolean)("activo").default(true),
     created_at: (0, import_pg_core.timestamp)("created_at", { mode: "string" }).defaultNow().notNull(),
     updated_at: (0, import_pg_core.timestamp)("updated_at", { mode: "string" }).defaultNow().notNull()
