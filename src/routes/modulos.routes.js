@@ -16,8 +16,25 @@ async function modulosRoutes(fastify) {
   const modulosService = new GenericService(schema.modulos)
 
   fastify.get('/', { preHandler: requireSuperAdmin }, async (request, reply) => {
-    const data = await modulosService.getAll(request.query)
-    return reply.code(200).send({ data })
+    const rawData = await modulosService.getAll(request.query)
+    
+    // Ordenar lógicamente: Padres primero según su orden, y luego sus hijos inmediatamente abajo según su orden
+    const parents = rawData.filter(m => !m.padre_id).sort((a, b) => a.orden - b.orden)
+    const children = rawData.filter(m => m.padre_id).sort((a, b) => a.orden - b.orden)
+    
+    const sortedData = []
+    parents.forEach(p => {
+      sortedData.push(p)
+      sortedData.push(...children.filter(c => c.padre_id === p.id))
+    })
+    
+    // Por si algún hijo quedó "huérfano" en la base de datos (inconsistencia)
+    const assignedIds = new Set(sortedData.map(d => d.id))
+    children.forEach(c => {
+      if (!assignedIds.has(c.id)) sortedData.push(c)
+    })
+
+    return reply.code(200).send({ data: sortedData })
   })
 
   fastify.get('/:id', { preHandler: requireSuperAdmin }, async (request, reply) => {
