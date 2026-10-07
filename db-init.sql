@@ -270,9 +270,13 @@ CREATE TABLE IF NOT EXISTS "usuario_accesos" (
 
 CREATE TABLE IF NOT EXISTS "modulos" (
     "id" uuid PRIMARY KEY NOT NULL DEFAULT gen_random_uuid(),
+    "padre_id" uuid REFERENCES modulos(id) ON DELETE CASCADE,
     "codigo" varchar(50) NOT NULL UNIQUE,
     "nombre" varchar(100) NOT NULL,
     "descripcion" text,
+    "ruta" varchar(255),
+    "tipo" varchar(50) NOT NULL DEFAULT 'MODULO',
+    "orden" integer NOT NULL DEFAULT 0,
     "activo" boolean DEFAULT true,
     "created_at" timestamp NOT NULL DEFAULT now(),
     "updated_at" timestamp NOT NULL DEFAULT now()

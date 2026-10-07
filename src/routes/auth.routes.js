@@ -62,6 +62,15 @@ async function authRoutes(fastify) {
     const user = await authService.getMe(fastify, request.user.id)
     return reply.code(200).send({ user })
   })
+
+  // ── GET /menu ──────────────────────────────────────────────────────────────
+  fastify.get('/menu', {
+    preHandler: [fastify.authenticate],
+  }, async (request, reply) => {
+    const activeEmpresaId = request.headers['x-empresa-id']
+    const menu = await authService.getUserMenu(fastify, request.user.id, activeEmpresaId, request.user.es_super_admin)
+    return reply.code(200).send(menu)
+  })
 }
 
 module.exports = authRoutes

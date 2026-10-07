@@ -89,4 +89,88 @@ async function getMe(fastify, userId) {
   return safeUser
 }
 
-module.exports = { login, refresh, logout, getMe }
+const { sql } = require('drizzle-orm')
+
+async function getUserMenu(fastify, userId, activeEmpresaId, esSuperAdmin) {
+  // If Super Admin, they can see all active modules
+  if (esSuperAdmin) {
+    const rows = await db.execute(sql`
+      SELECT id, padre_id, codigo, nombre, descripcion, ruta, tipo, orden
+      FROM modulos
+      WHERE activo = true
+      ORDER BY orden ASC
+    `)
+    return buildTree(rows)
+  }
+
+  // Otherwise, filter by company and user access
+  const empresaFilter = activeEmpresaId ? sql`AND ua.empresa_id = ${activeEmpresaId}` : sql``
+  
+  const rows = await db.execute(sql`
+    WITH RECURSIVE module_tree AS (
+      -- Get modules the user has permissions for
+      SELECT m.id, m.padre_id, m.codigo, m.nombre, m.descripcion, m.ruta, m.tipo, m.orden
+      FROM modulos m
+      INNER JOIN permisos p ON p.modulo_id = m.id
+      INNER JOIN rol_permisos rp ON rp.permiso_id = p.id
+      INNER JOIN usuario_accesos ua ON ua.rol_id = rp.rol_id
+      WHERE ua.usuario_id = ${userId}
+        AND ua.activo = true
+        AND m.activo = true
+        ${empresaFilter}
+      
+      UNION
+      
+      -- Add parent modules to complete the tree
+      SELECT m.id, m.padre_id, m.codigo, m.nombre, m.descripcion, m.ruta, m.tipo, m.orden
+      FROM modulos m
+      INNER JOIN module_tree mt ON m.id = mt.padre_id
+      WHERE m.activo = true
+    ),
+    root_modules AS (
+      SELECT id FROM module_tree WHERE padre_id IS NULL
+    )
+    SELECT DISTINCT mt.*
+    FROM module_tree mt
+    -- Validation: Ensure the root module is enabled for the active company
+    INNER JOIN empresa_modulos em ON em.modulo_id = 
+      COALESCE((
+         WITH RECURSIVE mt_up AS (
+           SELECT id, padre_id FROM modulos WHERE id = mt.id
+           UNION ALL
+           SELECT m2.id, m2.padre_id FROM modulos m2 INNER JOIN mt_up ON m2.id = mt_up.padre_id
+         ) SELECT id FROM mt_up WHERE padre_id IS NULL LIMIT 1
+      ), mt.id)
+    INNER JOIN usuario_accesos ua ON ua.empresa_id = em.empresa_id
+    WHERE ua.usuario_id = ${userId}
+      AND ua.activo = true
+      AND em.activo = true
+      ${empresaFilter}
+    ORDER BY mt.orden ASC
+  `)
+
+  return buildTree(rows)
+}
+
+function buildTree(items) {
+  const rootItems = []
+  const lookup = {}
+
+  for (const item of items) {
+    lookup[item.id] = { ...item, items: [] }
+  }
+
+  for (const item of items) {
+    if (item.padre_id) {
+      if (lookup[item.padre_id]) {
+        lookup[item.padre_id].items.push(lookup[item.id])
+      }
+    } else {
+      rootItems.push(lookup[item.id])
+    }
+  }
+
+  return rootItems
+}
+
+module.exports = { login, refresh, logout, getMe, getUserMenu }

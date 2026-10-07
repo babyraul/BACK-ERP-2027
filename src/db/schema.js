@@ -512,9 +512,13 @@ const modulos = (0, import_pg_core.pgTable)(
   "modulos",
   {
     id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
+    padre_id: (0, import_pg_core.uuid)("padre_id"),
     codigo: (0, import_pg_core.varchar)("codigo", { length: 50 }).notNull(),
     nombre: (0, import_pg_core.varchar)("nombre", { length: 100 }).notNull(),
     descripcion: (0, import_pg_core.text)("descripcion"),
+    ruta: (0, import_pg_core.varchar)("ruta", { length: 255 }),
+    tipo: (0, import_pg_core.varchar)("tipo", { length: 50 }).default('MODULO').notNull(),
+    orden: (0, import_pg_core.integer)("orden").default(0).notNull(),
     activo: (0, import_pg_core.boolean)("activo").default(true),
     created_at: (0, import_pg_core.timestamp)("created_at", { mode: "string" }).defaultNow().notNull(),
     updated_at: (0, import_pg_core.timestamp)("updated_at", { mode: "string" }).defaultNow().notNull()

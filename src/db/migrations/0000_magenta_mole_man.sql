@@ -280,9 +280,13 @@ CREATE TABLE IF NOT EXISTS "usuario_accesos" (
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "modulos" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"padre_id" uuid REFERENCES modulos(id) ON DELETE CASCADE,
 	"codigo" varchar(50) NOT NULL,
 	"nombre" varchar(100) NOT NULL,
 	"descripcion" text,
+	"ruta" varchar(255),
+	"tipo" varchar(50) DEFAULT 'MODULO' NOT NULL,
+	"orden" integer DEFAULT 0 NOT NULL,
 	"activo" boolean DEFAULT true,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
