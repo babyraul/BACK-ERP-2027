@@ -2,8 +2,8 @@
 
 const bcrypt = require('bcrypt')
 const { db } = require('../db')
-const { usuarios } = require('../db/schema')
-const { eq } = require('drizzle-orm')
+const { usuarios, usuario_accesos, empresas, sucursales, roles } = require('../db/schema')
+const { eq, and } = require('drizzle-orm')
 
 /**
  * Servicio de autenticación real conectado a la BD.
@@ -26,7 +26,41 @@ async function login(fastify, usuario, password) {
     throw fastify.httpErrors.unauthorized('Credenciales incorrectas.')
   }
 
-  const payload = { id: user.id, usuario: user.usuario, es_super_admin: user.es_super_admin }
+  let active_acceso = null
+  let accesosList = []
+  
+  if (!user.es_super_admin) {
+    accesosList = await db.select({
+      id: usuario_accesos.id,
+      empresa_id: usuario_accesos.empresa_id,
+      branch_id: usuario_accesos.branch_id,
+      rol_id: usuario_accesos.rol_id,
+      es_predeterminado: usuario_accesos.es_predeterminado,
+      empresa_nombre: empresas.razon_social,
+      sucursal_nombre: sucursales.nombre_comercial,
+      rol_nombre: roles.nombre
+    })
+    .from(usuario_accesos)
+    .innerJoin(empresas, eq(usuario_accesos.empresa_id, empresas.id))
+    .innerJoin(sucursales, eq(usuario_accesos.branch_id, sucursales.id))
+    .innerJoin(roles, eq(usuario_accesos.rol_id, roles.id))
+    .where(and(eq(usuario_accesos.usuario_id, user.id), eq(usuario_accesos.activo, true)))
+
+    if (accesosList.length === 0) {
+      throw fastify.httpErrors.unauthorized('El usuario no tiene ninguna sucursal asignada.')
+    }
+
+    active_acceso = accesosList.find(a => a.es_predeterminado) || accesosList[0]
+  }
+
+  const payload = { 
+    id: user.id, 
+    usuario: user.usuario, 
+    es_super_admin: user.es_super_admin,
+    empresa_id: active_acceso?.empresa_id,
+    branch_id: active_acceso?.branch_id,
+    rol_id: active_acceso?.rol_id
+  }
 
   const access_token = fastify.jwt.sign(payload)
 
@@ -40,7 +74,14 @@ async function login(fastify, usuario, password) {
   return {
     access_token,
     refresh_token,
-    user: { id: user.id, usuario: user.usuario, nombre: user.nombre, es_super_admin: user.es_super_admin },
+    user: { 
+      id: user.id, 
+      usuario: user.usuario, 
+      nombre: user.nombre, 
+      es_super_admin: user.es_super_admin,
+      active_acceso,
+      accesos: accesosList
+    },
   }
 }
 
