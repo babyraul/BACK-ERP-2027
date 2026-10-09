@@ -15,13 +15,21 @@ async function empresasRoutes(fastify) {
   fastify.get('/', async (request, reply) => {
     const { eq } = require('drizzle-orm')
     
-    const rawData = await db
+    let baseQuery = db
       .select({
         empresa: schema.empresas,
         ubigeo: schema.ubigeo
       })
       .from(schema.empresas)
       .leftJoin(schema.ubigeo, eq(schema.empresas.ubigeo, schema.ubigeo.codigo))
+
+    // ── Row-Level Security (RLS) ──
+    // Si no es super admin, solo puede ver su propia empresa
+    if (!request.user.es_super_admin && request.user.empresa_id) {
+      baseQuery = baseQuery.where(eq(schema.empresas.id, request.user.empresa_id))
+    }
+
+    const rawData = await baseQuery
 
     const data = rawData.map(row => ({
       ...row.empresa,
@@ -64,6 +72,7 @@ async function empresasRoutes(fastify) {
           razon_social: nuevaEmpresa.razon_social,
           nombre_comercial: nuevaEmpresa.nombre_comercial,
           sucursal_nombre: "SEDE PRINCIPAL",
+          codigo_anexo: "0000",
           direccion: nuevaEmpresa.direccion,
           ubigeo: nuevaEmpresa.ubigeo,
         }).returning()

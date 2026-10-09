@@ -63,6 +63,24 @@ async function authRoutes(fastify) {
     return reply.code(200).send({ user })
   })
 
+  // ── POST /switch-branch ────────────────────────────────────────────────────
+  fastify.post('/switch-branch', {
+    preHandler: [fastify.authenticate],
+    schema: {
+      body: {
+        type: 'object',
+        required: ['branch_id'],
+        properties: {
+          branch_id: { type: 'string', format: 'uuid' }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    const { branch_id } = request.body
+    const result = await authService.switchBranch(fastify, request.user.id, branch_id)
+    return reply.code(200).send(result)
+  })
+
   // ── GET /menu ──────────────────────────────────────────────────────────────
   fastify.get('/menu', {
     preHandler: [fastify.authenticate],

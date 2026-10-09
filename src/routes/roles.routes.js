@@ -5,49 +5,57 @@ const schema = require('../db/schema')
 const GenericService = require('../core/generic.service')
 
 async function rolesRoutes(fastify) {
-  fastify.addHook('preHandler', fastify.authenticate)
-
-  const requireSuperAdmin = async (request, reply) => {
-    if (!request.user.es_super_admin) {
-      return reply.code(403).send({ message: 'Acceso restringido a super administradores.' })
-    }
-  }
+  // Middleware Global para todas las rutas de este bloque
+  // Validará automáticamente los permisos infiriéndolos de la URL (ej. roles.ver)
+  fastify.addHook('preHandler', fastify.authorize)
 
   const rolesService = new GenericService(schema.roles)
 
   // GET /roles
-  fastify.get('/', { preHandler: requireSuperAdmin }, async (request, reply) => {
-    const data = await rolesService.getAll(request.query)
+  fastify.get('/', async (request, reply) => {
+    const { eq, or, isNull } = require('drizzle-orm')
+    let baseQuery = db.select().from(schema.roles)
+    
+    // ── Row-Level Security (RLS) ──
+    if (!request.user.es_super_admin && request.user.empresa_id) {
+      baseQuery = baseQuery.where(
+        or(
+          eq(schema.roles.empresa_id, request.user.empresa_id),
+          isNull(schema.roles.empresa_id) // roles del sistema
+        )
+      )
+    }
+    const data = await baseQuery
     return reply.code(200).send({ data })
   })
 
   // GET /roles/:id
-  fastify.get('/:id', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.get('/:id', async (request, reply) => {
     const data = await rolesService.getById(request.params.id)
     if (!data) throw fastify.httpErrors.notFound(`Rol no encontrado`)
     return reply.code(200).send({ data })
   })
 
   // POST /roles
-  fastify.post('/', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.post('/', async (request, reply) => {
     const data = await rolesService.create(request.body)
     return reply.code(201).send({ message: 'Rol creado', data })
   })
 
   // PUT /roles/:id
-  fastify.put('/:id', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.put('/:id', async (request, reply) => {
     const data = await rolesService.update(request.params.id, request.body)
     return reply.code(200).send({ message: 'Rol actualizado', data })
   })
 
   // DELETE /roles/:id
-  fastify.delete('/:id', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.delete('/:id', async (request, reply) => {
     const data = await rolesService.remove(request.params.id)
     return reply.code(200).send({ message: 'Rol eliminado', data })
   })
 
-  // GET /roles/:id/permisos
-  fastify.get('/:id/permisos', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  // GET /roles/:id/permisos (Requiere permiso especial o superadmin, o lo mapea a roles.permisos)
+  fastify.get('/:id/permisos', { config: { permission: 'roles.permisos' } }, async (request, reply) => {
     const { eq } = require('drizzle-orm')
     const rolId = request.params.id
     
@@ -61,7 +69,7 @@ async function rolesRoutes(fastify) {
   })
 
   // POST /roles/:id/permisos
-  fastify.post('/:id/permisos', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.post('/:id/permisos', { config: { permission: 'roles.permisos' } }, async (request, reply) => {
     const { eq } = require('drizzle-orm')
     const rolId = request.params.id
     const { permisosIds } = request.body // Array de UUIDs

@@ -84,24 +84,9 @@ async function authPlugin(fastify) {
       requiredPermission = `${resource}.${action}`
     }
 
-    // 5. Validar en BD
-    const { rol_id } = request.user
-    if (!rol_id) {
-      return reply.code(403).send({ message: 'No tiene rol activo para realizar esta acción.' })
-    }
-
-    const { db } = require('../db')
-    const { sql } = require('drizzle-orm')
-
-    const result = await db.execute(sql`
-      SELECT 1 
-      FROM rol_permisos rp
-      INNER JOIN permisos p ON p.id = rp.permiso_id
-      WHERE rp.rol_id = ${rol_id} AND p.codigo = ${requiredPermission}
-      LIMIT 1
-    `)
-
-    if (result.length === 0) {
+    // 5. Validar en Memoria O(1) extraído del JWT
+    const { permisos } = request.user
+    if (!permisos || !permisos.includes(requiredPermission)) {
       return reply.code(403).send({ message: `Acceso denegado. Se requiere el permiso: ${requiredPermission}` })
     }
   })

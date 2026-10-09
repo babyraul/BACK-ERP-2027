@@ -6,31 +6,46 @@ const GenericService = require('../core/generic.service')
 const bcrypt = require('bcrypt')
 
 async function usuariosRoutes(fastify) {
-  fastify.addHook('preHandler', fastify.authenticate)
-
-  const requireSuperAdmin = async (request, reply) => {
-    if (!request.user.es_super_admin) {
-      return reply.code(403).send({ message: 'Acceso restringido a super administradores.' })
-    }
-  }
+  // Middleware Global para todas las rutas de este bloque
+  // Validará automáticamente los permisos infiriéndolos de la URL (ej. usuarios.ver)
+  fastify.addHook('preHandler', fastify.authorize)
 
   const usuariosService = new GenericService(schema.usuarios)
 
-  fastify.get('/', { preHandler: requireSuperAdmin }, async (request, reply) => {
-    const data = await usuariosService.getAll(request.query)
-    // Exclude passwords from response
-    const safeData = data.map(({ password, ...rest }) => rest)
+  fastify.get('/', async (request, reply) => {
+    // ── Row-Level Security (RLS) ──
+    // Obtener los IDs de usuarios que pertenecen a la empresa del usuario actual
+    let safeData = []
+    
+    if (request.user.es_super_admin) {
+      const data = await usuariosService.getAll(request.query)
+      safeData = data.map(({ password, ...rest }) => rest)
+    } else if (request.user.empresa_id) {
+      const { eq, inArray } = require('drizzle-orm')
+      // Buscar qué usuarios tienen acceso a la misma empresa
+      const accesos = await db.select({ usuario_id: schema.usuario_accesos.usuario_id })
+                              .from(schema.usuario_accesos)
+                              .where(eq(schema.usuario_accesos.empresa_id, request.user.empresa_id))
+      
+      const userIds = accesos.map(a => a.usuario_id)
+      
+      if (userIds.length > 0) {
+        const data = await db.select().from(schema.usuarios).where(inArray(schema.usuarios.id, userIds))
+        safeData = data.map(({ password, ...rest }) => rest)
+      }
+    }
+    
     return reply.code(200).send({ data: safeData })
   })
 
-  fastify.get('/:id', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.get('/:id', async (request, reply) => {
     const data = await usuariosService.getById(request.params.id)
     if (!data) throw fastify.httpErrors.notFound(`Usuario no encontrado`)
     const { password, ...safeData } = data
     return reply.code(200).send({ data: safeData })
   })
 
-  fastify.post('/', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.post('/', async (request, reply) => {
     const payload = request.body
     
     // Validate uniqueness of username
@@ -56,7 +71,7 @@ async function usuariosRoutes(fastify) {
     return reply.code(201).send({ message: 'Usuario creado exitosamente', data: safeData })
   })
 
-  fastify.put('/:id', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.put('/:id', async (request, reply) => {
     const payload = request.body
 
     if (payload.password) {
@@ -85,7 +100,7 @@ async function usuariosRoutes(fastify) {
     return reply.code(200).send({ message: 'Usuario actualizado', data: safeData })
   })
 
-  fastify.delete('/:id', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.delete('/:id', async (request, reply) => {
     const data = await usuariosService.remove(request.params.id)
     return reply.code(200).send({ message: 'Usuario eliminado', data })
   })
@@ -97,7 +112,7 @@ async function usuariosRoutes(fastify) {
   const accesosService = new GenericService(schema.usuario_accesos)
 
   // Obtener accesos de un usuario con joins para mostrar nombres legibles
-  fastify.get('/:id/accesos', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.get('/:id/accesos', { config: { permission: 'usuarios.accesos' } }, async (request, reply) => {
     const { eq } = require('drizzle-orm')
     const userId = request.params.id
 
@@ -109,7 +124,8 @@ async function usuariosRoutes(fastify) {
       es_predeterminado: schema.usuario_accesos.es_predeterminado,
       activo: schema.usuario_accesos.activo,
       empresa_nombre: schema.empresas.razon_social,
-      sucursal_nombre: schema.sucursales.nombre_comercial,
+      sucursal_nombre: schema.sucursales.sucursal_nombre,
+      direccion: schema.sucursales.direccion,
       rol_nombre: schema.roles.nombre
     })
     .from(schema.usuario_accesos)
@@ -122,7 +138,7 @@ async function usuariosRoutes(fastify) {
   })
 
   // Crear un nuevo acceso para un usuario
-  fastify.post('/:id/accesos', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.post('/:id/accesos', { config: { permission: 'usuarios.accesos' } }, async (request, reply) => {
     const userId = request.params.id
     const payload = { ...request.body, usuario_id: userId }
     
@@ -152,7 +168,7 @@ async function usuariosRoutes(fastify) {
   })
 
   // Actualizar un acceso existente
-  fastify.put('/:id/accesos/:accesoId', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.put('/:id/accesos/:accesoId', { config: { permission: 'usuarios.accesos' } }, async (request, reply) => {
     const userId = request.params.id
     const accesoId = request.params.accesoId
     const payload = request.body
@@ -171,7 +187,7 @@ async function usuariosRoutes(fastify) {
   })
 
   // Eliminar un acceso
-  fastify.delete('/:id/accesos/:accesoId', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.delete('/:id/accesos/:accesoId', { config: { permission: 'usuarios.accesos' } }, async (request, reply) => {
     const data = await accesosService.remove(request.params.accesoId)
     return reply.code(200).send({ message: 'Acceso removido', data })
   })

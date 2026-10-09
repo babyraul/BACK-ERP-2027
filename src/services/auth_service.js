@@ -53,16 +53,18 @@ async function login(fastify, usuario, password) {
     active_acceso = accesosList.find(a => a.es_predeterminado) || accesosList[0]
   }
 
+  const permisos = await getUserPermissions(user.es_super_admin, active_acceso?.rol_id)
+
   const payload = { 
     id: user.id, 
     usuario: user.usuario, 
     es_super_admin: user.es_super_admin,
     empresa_id: active_acceso?.empresa_id,
     branch_id: active_acceso?.branch_id,
-    rol_id: active_acceso?.rol_id
+    rol_id: active_acceso?.rol_id,
+    permisos // Inyectado para validación en memoria O(1)
   }
 
-  const permisos = await getUserPermissions(user.es_super_admin, active_acceso?.rol_id)
 
   const access_token = fastify.jwt.sign(payload)
 
@@ -231,4 +233,75 @@ function buildTree(items) {
   return rootItems
 }
 
-module.exports = { login, refresh, logout, getMe, getUserMenu, getUserPermissions, buildTree }
+async function switchBranch(fastify, userId, branchId) {
+  // 1. Obtener el usuario
+  const [user] = await db.select().from(usuarios).where(eq(usuarios.id, userId));
+  if (!user || !user.activo || user.bloqueado) {
+    throw fastify.httpErrors.unauthorized('Usuario inactivo o bloqueado.')
+  }
+
+  let active_acceso = null
+  let accesosList = []
+
+  // 2. Verificar acceso a la sucursal
+  if (!user.es_super_admin) {
+    accesosList = await db.select({
+      id: usuario_accesos.id,
+      empresa_id: usuario_accesos.empresa_id,
+      branch_id: usuario_accesos.branch_id,
+      rol_id: usuario_accesos.rol_id,
+      es_predeterminado: usuario_accesos.es_predeterminado,
+      empresa_nombre: empresas.razon_social,
+      sucursal_nombre: sucursales.nombre_comercial,
+      rol_nombre: roles.nombre
+    })
+    .from(usuario_accesos)
+    .innerJoin(empresas, eq(usuario_accesos.empresa_id, empresas.id))
+    .innerJoin(sucursales, eq(usuario_accesos.branch_id, sucursales.id))
+    .innerJoin(roles, eq(usuario_accesos.rol_id, roles.id))
+    .where(and(eq(usuario_accesos.usuario_id, user.id), eq(usuario_accesos.activo, true)))
+
+    active_acceso = accesosList.find(a => String(a.branch_id) === String(branchId))
+    if (!active_acceso) {
+      throw fastify.httpErrors.forbidden('No tienes acceso a esta sucursal.')
+    }
+  } else {
+    const [sucursal] = await db.select().from(sucursales).where(eq(sucursales.id, branchId))
+    if (!sucursal) throw fastify.httpErrors.notFound('Sucursal no encontrada')
+    active_acceso = {
+      empresa_id: sucursal.empresa_id,
+      branch_id: sucursal.id,
+      rol_id: null
+    }
+  }
+
+  // 3. Extraer permisos exactos para esa sucursal
+  const permisos = await getUserPermissions(user.es_super_admin, active_acceso?.rol_id)
+
+  const payload = { 
+    id: user.id, 
+    usuario: user.usuario, 
+    es_super_admin: user.es_super_admin,
+    empresa_id: active_acceso?.empresa_id,
+    branch_id: active_acceso?.branch_id,
+    rol_id: active_acceso?.rol_id,
+    permisos
+  }
+
+  const access_token = fastify.jwt.sign(payload)
+
+  return {
+    access_token,
+    user: { 
+      id: user.id, 
+      usuario: user.usuario, 
+      nombre: user.nombre, 
+      es_super_admin: user.es_super_admin,
+      active_acceso,
+      accesos: accesosList,
+      permisos
+    },
+  }
+}
+
+module.exports = { login, refresh, logout, getMe, getUserMenu, getUserPermissions, buildTree, switchBranch }

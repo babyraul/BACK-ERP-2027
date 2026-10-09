@@ -13,7 +13,8 @@ async function gestionRoutes(fastify) {
   fastify.register(empresasRoutes, { prefix: '/empresas' })
   
   // Configuración para Sucursales (Solo Super Admin)
-  fastify.register(buildCrudRoutes(schema.sucursales, { requireAdmin: true }), { prefix: '/sucursales' })
+  const sucursalesRoutes = require('./sucursales.routes')
+  fastify.register(sucursalesRoutes, { prefix: '/sucursales' })
 
   // Configuración para Almacenes (Solo Super Admin)
   fastify.register(buildCrudRoutes(schema.almacenes, { requireAdmin: true }), { prefix: '/almacenes' })
