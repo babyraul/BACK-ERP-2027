@@ -23,6 +23,14 @@ async function gestionRoutes(fastify) {
   const modulosRoutes = require('./modulos.routes')
   fastify.register(modulosRoutes, { prefix: '/modulos' })
 
+  // Cajas (caja_serie_correlativo)
+  const cajasRoutes = require('./cajas.routes')
+  fastify.register(cajasRoutes, { prefix: '/cajas' })
+
+  // Tipos de Comprobante
+  const tiposComprobanteRoutes = require('./tiposComprobante.routes')
+  fastify.register(tiposComprobanteRoutes, { prefix: '/tipos-comprobante' })
+
   // Roles y Permisos
   const rolesRoutes = require('./roles.routes')
   fastify.register(rolesRoutes, { prefix: '/roles' })

@@ -51,6 +51,12 @@ async function authPlugin(fastify) {
     // 1. Asegurar autenticación
     try {
       await request.jwtVerify()
+      // Injectar variables de acceso activo a nivel raíz para fácil acceso
+      if (request.user && request.user.active_acceso) {
+        request.user.empresa_id = request.user.active_acceso.empresa_id
+        request.user.branch_id = request.user.active_acceso.branch_id
+        request.user.rol_nivel = request.user.active_acceso.rol_nivel
+      }
     } catch (err) {
       return reply.code(401).send({ message: 'Token inválido o expirado.' })
     }
