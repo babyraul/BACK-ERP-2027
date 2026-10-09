@@ -62,6 +62,8 @@ async function login(fastify, usuario, password) {
     rol_id: active_acceso?.rol_id
   }
 
+  const permisos = await getUserPermissions(user.es_super_admin, active_acceso?.rol_id)
+
   const access_token = fastify.jwt.sign(payload)
 
   const refresh_token = fastify.jwt.sign(
@@ -80,7 +82,8 @@ async function login(fastify, usuario, password) {
       nombre: user.nombre, 
       es_super_admin: user.es_super_admin,
       active_acceso,
-      accesos: accesosList
+      accesos: accesosList,
+      permisos
     },
   }
 }
@@ -126,8 +129,22 @@ async function getMe(fastify, userId) {
     throw fastify.httpErrors.notFound('Usuario no encontrado.')
   }
   
+  
   const { password, ...safeUser } = user
   return safeUser
+}
+
+async function getUserPermissions(esSuperAdmin, rolId) {
+  if (esSuperAdmin) return ['*']
+  if (!rolId) return []
+  const { sql } = require('drizzle-orm')
+  const rows = await db.execute(sql`
+    SELECT p.codigo
+    FROM permisos p
+    INNER JOIN rol_permisos rp ON rp.permiso_id = p.id
+    WHERE rp.rol_id = ${rolId}
+  `)
+  return rows.map(r => r.codigo)
 }
 
 const { sql } = require('drizzle-orm')
@@ -214,4 +231,4 @@ function buildTree(items) {
   return rootItems
 }
 
-module.exports = { login, refresh, logout, getMe, getUserMenu, buildTree }
+module.exports = { login, refresh, logout, getMe, getUserMenu, getUserPermissions, buildTree }

@@ -5,19 +5,14 @@ const schema = require('../db/schema')
 const GenericService = require('../core/generic.service')
 
 async function empresasRoutes(fastify) {
-  fastify.addHook('preHandler', fastify.authenticate)
-
-  // Bloqueo para superadmin
-  const requireSuperAdmin = async (request, reply) => {
-    if (!request.user.es_super_admin) {
-      return reply.code(403).send({ message: 'Acceso restringido a super administradores.' })
-    }
-  }
+  // Middleware Global para todas las rutas de este bloque
+  // Validará automáticamente los permisos infiriéndolos de la URL (ej. empresas.ver)
+  fastify.addHook('preHandler', fastify.authorize)
 
   const empresasService = new GenericService(schema.empresas)
 
-  // GET /empresas
-  fastify.get('/', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  // GET /empresas (Requiere empresas.ver)
+  fastify.get('/', async (request, reply) => {
     const { eq } = require('drizzle-orm')
     
     const rawData = await db
@@ -38,15 +33,15 @@ async function empresasRoutes(fastify) {
     return reply.code(200).send({ data })
   })
 
-  // GET /empresas/:id
-  fastify.get('/:id', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  // GET /empresas/:id (Requiere empresas.ver)
+  fastify.get('/:id', async (request, reply) => {
     const data = await empresasService.getById(request.params.id)
     if (!data) throw fastify.httpErrors.notFound(`Empresa no encontrada`)
     return reply.code(200).send({ data })
   })
 
-  // POST /empresas (Creación en Cascada: Empresa -> Sucursal -> Almacén)
-  fastify.post('/', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  // POST /empresas (Requiere empresas.crear) - Creación en Cascada: Empresa -> Sucursal -> Almacén
+  fastify.post('/', async (request, reply) => {
     const datosEmpresa = request.body
 
     try {
@@ -91,20 +86,20 @@ async function empresasRoutes(fastify) {
     }
   })
 
-  // PUT /empresas/:id
-  fastify.put('/:id', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  // PUT /empresas/:id (Requiere empresas.editar)
+  fastify.put('/:id', async (request, reply) => {
     const data = await empresasService.update(request.params.id, request.body)
     return reply.code(200).send({ message: 'Empresa actualizada', data })
   })
 
-  // DELETE /empresas/:id
-  fastify.delete('/:id', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  // DELETE /empresas/:id (Requiere empresas.eliminar)
+  fastify.delete('/:id', async (request, reply) => {
     const data = await empresasService.remove(request.params.id)
     return reply.code(200).send({ message: 'Empresa eliminada', data })
   })
 
-  // GET /empresas/:id/modulos
-  fastify.get('/:id/modulos', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  // GET /empresas/:id/modulos (Excepción: requiere superadmin explícito o un permiso especial)
+  fastify.get('/:id/modulos', { config: { permission: 'empresas.modulos' } }, async (request, reply) => {
     const { eq } = require('drizzle-orm')
     const empresaId = request.params.id
     
@@ -118,8 +113,8 @@ async function empresasRoutes(fastify) {
     return reply.code(200).send({ data: modulosIds })
   })
 
-  // POST /empresas/:id/modulos
-  fastify.post('/:id/modulos', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  // POST /empresas/:id/modulos (Excepción: requiere superadmin explícito o un permiso especial)
+  fastify.post('/:id/modulos', { config: { permission: 'empresas.modulos' } }, async (request, reply) => {
     const { eq } = require('drizzle-orm')
     const empresaId = request.params.id
     const { modulosIds } = request.body // Array de UUIDs

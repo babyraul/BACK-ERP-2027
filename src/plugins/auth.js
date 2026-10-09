@@ -45,6 +45,66 @@ async function authPlugin(fastify) {
       })
     }
   })
+
+  // ── Decorator: authorize (Validación Dinámica ERP) ──────────────────────
+  fastify.decorate('authorize', async function (request, reply) {
+    // 1. Asegurar autenticación
+    try {
+      await request.jwtVerify()
+    } catch (err) {
+      return reply.code(401).send({ message: 'Token inválido o expirado.' })
+    }
+
+    // 2. Superadmin pasa directo
+    if (request.user.es_super_admin) return
+
+    // 3. Extraer configuración explícita de la ruta (si la hay)
+    const routeConfig = request.routeOptions.config || {}
+    if (routeConfig.public) return // Rutas que no requieren validación granular
+
+    let requiredPermission = routeConfig.permission
+
+    // 4. Si no hay permiso explícito, inferir del path y method
+    if (!requiredPermission) {
+      const match = request.routeOptions.url.match(/^\/api\/([^\/]+)/)
+      if (!match) return // No es una ruta estándar de API, dejar pasar o manejar diferente
+      
+      const resource = match[1] // ej. "empresas"
+      
+      const methodMap = {
+        GET: 'ver',
+        POST: 'crear',
+        PUT: 'editar',
+        PATCH: 'editar',
+        DELETE: 'eliminar'
+      }
+      const action = methodMap[request.method]
+      if (!action) return // Método no mapeado
+      
+      requiredPermission = `${resource}.${action}`
+    }
+
+    // 5. Validar en BD
+    const { rol_id } = request.user
+    if (!rol_id) {
+      return reply.code(403).send({ message: 'No tiene rol activo para realizar esta acción.' })
+    }
+
+    const { db } = require('../db')
+    const { sql } = require('drizzle-orm')
+
+    const result = await db.execute(sql`
+      SELECT 1 
+      FROM rol_permisos rp
+      INNER JOIN permisos p ON p.id = rp.permiso_id
+      WHERE rp.rol_id = ${rol_id} AND p.codigo = ${requiredPermission}
+      LIMIT 1
+    `)
+
+    if (result.length === 0) {
+      return reply.code(403).send({ message: `Acceso denegado. Se requiere el permiso: ${requiredPermission}` })
+    }
+  })
 }
 
 module.exports = fp(authPlugin, { name: 'auth' })
