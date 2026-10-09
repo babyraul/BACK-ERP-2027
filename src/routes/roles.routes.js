@@ -13,18 +13,26 @@ async function rolesRoutes(fastify) {
 
   // GET /roles
   fastify.get('/', async (request, reply) => {
-    const { eq, or, isNull } = require('drizzle-orm')
+    const { eq, or, isNull, gt, and } = require('drizzle-orm')
     let baseQuery = db.select().from(schema.roles)
     
     // ── Row-Level Security (RLS) ──
-    if (!request.user.es_super_admin && request.user.empresa_id) {
-      baseQuery = baseQuery.where(
+    if (!request.user.es_super_admin) {
+      const conditions = [
         or(
           eq(schema.roles.empresa_id, request.user.empresa_id),
           isNull(schema.roles.empresa_id) // roles del sistema
         )
-      )
+      ]
+
+      // Jerarquía de roles: No puede ver roles de nivel igual o superior al suyo (menor o igual numéricamente)
+      if (request.user.rol_nivel !== undefined) {
+        conditions.push(gt(schema.roles.nivel, request.user.rol_nivel))
+      }
+
+      baseQuery = baseQuery.where(and(...conditions))
     }
+    
     const data = await baseQuery
     return reply.code(200).send({ data })
   })
@@ -38,24 +46,51 @@ async function rolesRoutes(fastify) {
 
   // POST /roles
   fastify.post('/', async (request, reply) => {
-    const data = await rolesService.create(request.body)
+    const payload = request.body
+    if (!request.user.es_super_admin && request.user.rol_nivel !== undefined) {
+      if (payload.nivel <= request.user.rol_nivel) {
+        return reply.code(403).send({ message: 'No puedes crear un rol con un nivel igual o superior al tuyo.' })
+      }
+    }
+    const data = await rolesService.create(payload)
     return reply.code(201).send({ message: 'Rol creado', data })
   })
 
   // PUT /roles/:id
   fastify.put('/:id', async (request, reply) => {
+    const existing = await rolesService.getById(request.params.id)
+    if (!existing) throw fastify.httpErrors.notFound(`Rol no encontrado`)
+
+    if (!request.user.es_super_admin && request.user.rol_nivel !== undefined) {
+      if (existing.nivel <= request.user.rol_nivel) {
+        return reply.code(403).send({ message: 'No puedes modificar un rol de nivel igual o superior al tuyo.' })
+      }
+      if (request.body.nivel !== undefined && request.body.nivel <= request.user.rol_nivel) {
+        return reply.code(403).send({ message: 'No puedes asignar un nivel igual o superior al tuyo.' })
+      }
+    }
+
     const data = await rolesService.update(request.params.id, request.body)
     return reply.code(200).send({ message: 'Rol actualizado', data })
   })
 
   // DELETE /roles/:id
   fastify.delete('/:id', async (request, reply) => {
+    const existing = await rolesService.getById(request.params.id)
+    if (!existing) throw fastify.httpErrors.notFound(`Rol no encontrado`)
+
+    if (!request.user.es_super_admin && request.user.rol_nivel !== undefined) {
+      if (existing.nivel <= request.user.rol_nivel) {
+        return reply.code(403).send({ message: 'No puedes eliminar un rol de nivel igual o superior al tuyo.' })
+      }
+    }
+
     const data = await rolesService.remove(request.params.id)
     return reply.code(200).send({ message: 'Rol eliminado', data })
   })
 
-  // GET /roles/:id/permisos (Requiere permiso especial o superadmin, o lo mapea a roles.permisos)
-  fastify.get('/:id/permisos', { config: { permission: 'roles.permisos' } }, async (request, reply) => {
+  // GET /roles/:id/permisos
+  fastify.get('/:id/permisos', { config: { permission: 'roles.ver' } }, async (request, reply) => {
     const { eq } = require('drizzle-orm')
     const rolId = request.params.id
     
@@ -69,11 +104,21 @@ async function rolesRoutes(fastify) {
   })
 
   // POST /roles/:id/permisos
-  fastify.post('/:id/permisos', { config: { permission: 'roles.permisos' } }, async (request, reply) => {
+  fastify.post('/:id/permisos', { config: { permission: 'roles.editar' } }, async (request, reply) => {
     const { eq } = require('drizzle-orm')
     const rolId = request.params.id
     const { permisosIds } = request.body // Array de UUIDs
     
+    // Validación de Jerarquía
+    const existing = await rolesService.getById(rolId)
+    if (!existing) throw fastify.httpErrors.notFound(`Rol no encontrado`)
+
+    if (!request.user.es_super_admin && request.user.rol_nivel !== undefined) {
+      if (existing.nivel <= request.user.rol_nivel) {
+        return reply.code(403).send({ message: 'No puedes modificar los permisos de un rol de nivel igual o superior al tuyo.' })
+      }
+    }
+
     try {
       await db.transaction(async (tx) => {
         // 1. Eliminar permisos actuales del rol

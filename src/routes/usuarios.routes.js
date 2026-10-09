@@ -21,13 +21,42 @@ async function usuariosRoutes(fastify) {
       const data = await usuariosService.getAll(request.query)
       safeData = data.map(({ password, ...rest }) => rest)
     } else if (request.user.empresa_id) {
-      const { eq, inArray } = require('drizzle-orm')
-      // Buscar qué usuarios tienen acceso a la misma empresa
-      const accesos = await db.select({ usuario_id: schema.usuario_accesos.usuario_id })
+      const { eq, inArray, lt, lte } = require('drizzle-orm')
+      
+      // 1. Encontrar todos los usuarios de la empresa
+      const accesos = await db.select({ 
+                                usuario_id: schema.usuario_accesos.usuario_id,
+                                rol_id: schema.usuario_accesos.rol_id 
+                              })
                               .from(schema.usuario_accesos)
                               .where(eq(schema.usuario_accesos.empresa_id, request.user.empresa_id))
       
-      const userIds = accesos.map(a => a.usuario_id)
+      // 2. Extraer roles para determinar sus niveles
+      const rolIds = [...new Set(accesos.map(a => a.rol_id).filter(Boolean))]
+      const rolesData = rolIds.length > 0 
+          ? await db.select({ id: schema.roles.id, nivel: schema.roles.nivel }).from(schema.roles).where(inArray(schema.roles.id, rolIds))
+          : []
+      
+      const rolNivelMap = {}
+      rolesData.forEach(r => rolNivelMap[r.id] = r.nivel)
+
+      // 3. Agrupar el mejor nivel (mínimo número) de cada usuario
+      const userMinLevel = {}
+      for (const acc of accesos) {
+         if (!acc.rol_id) continue
+         const nivel = rolNivelMap[acc.rol_id] ?? 999
+         if (!userMinLevel[acc.usuario_id] || nivel < userMinLevel[acc.usuario_id]) {
+             userMinLevel[acc.usuario_id] = nivel
+         }
+      }
+
+      // 4. Filtrar usuarios: Solo aquellos cuyo mejor rol sea estrictamente INFERIOR al nuestro (mayor número)
+      let userIds = []
+      if (request.user.rol_nivel !== undefined) {
+         userIds = Object.keys(userMinLevel).filter(uid => userMinLevel[uid] > request.user.rol_nivel)
+      } else {
+         userIds = Object.keys(userMinLevel)
+      }
       
       if (userIds.length > 0) {
         const data = await db.select().from(schema.usuarios).where(inArray(schema.usuarios.id, userIds))
@@ -46,33 +75,69 @@ async function usuariosRoutes(fastify) {
   })
 
   fastify.post('/', async (request, reply) => {
-    const payload = request.body
+    const { empresa_id, branch_id, rol_id, ...userPayload } = request.body
     
     // Validate uniqueness of username
     const { eq } = require('drizzle-orm')
-    const [existing] = await db.select().from(schema.usuarios).where(eq(schema.usuarios.usuario, payload.usuario))
+    const [existing] = await db.select().from(schema.usuarios).where(eq(schema.usuarios.usuario, userPayload.usuario))
     if (existing) {
       return reply.code(400).send({ message: 'El nombre de usuario ya está en uso.' })
     }
 
-    if (payload.password) {
-      payload.password = await bcrypt.hash(payload.password, 10)
+    if (userPayload.password) {
+      userPayload.password = await bcrypt.hash(userPayload.password, 10)
     } else {
       return reply.code(400).send({ message: 'La contraseña es obligatoria para un usuario nuevo.' })
     }
 
-    // Default current_session_id for new users to empty or placeholder
-    if (!payload.current_session_id) {
-      payload.current_session_id = ''
+    // Default current_session_id for new users to a unique placeholder
+    if (!userPayload.current_session_id) {
+      userPayload.current_session_id = require('crypto').randomUUID()
     }
 
-    const data = await usuariosService.create(payload)
-    const { password, ...safeData } = data
-    return reply.code(201).send({ message: 'Usuario creado exitosamente', data: safeData })
+    // Validación de Jerarquía para el acceso inicial
+    let targetRol = null
+    if (rol_id) {
+      const [rol] = await db.select().from(schema.roles).where(eq(schema.roles.id, rol_id))
+      targetRol = rol
+      if (!request.user.es_super_admin && request.user.rol_nivel !== undefined) {
+        if (!targetRol) return reply.code(400).send({ message: 'Rol inválido.' })
+        if (targetRol.nivel <= request.user.rol_nivel) {
+          return reply.code(403).send({ message: 'No puedes asignar un rol de nivel igual o superior al tuyo.' })
+        }
+      }
+    }
+
+    try {
+      const result = await db.transaction(async (tx) => {
+        // 1. Insertar el usuario
+        const [newUser] = await tx.insert(schema.usuarios).values(userPayload).returning()
+
+        // 2. Insertar el acceso inicial si se proporcionaron los datos
+        if (empresa_id && branch_id && rol_id) {
+          await tx.insert(schema.usuario_accesos).values({
+            usuario_id: newUser.id,
+            empresa_id,
+            branch_id,
+            rol_id,
+            es_predeterminado: true,
+            activo: true
+          })
+        }
+
+        return newUser
+      })
+
+      const { password, ...safeData } = result
+      return reply.code(201).send({ message: 'Usuario creado exitosamente', data: safeData })
+    } catch (error) {
+      fastify.log.error(error)
+      return reply.code(500).send({ message: 'Error al crear el usuario', error: error.message })
+    }
   })
 
   fastify.put('/:id', async (request, reply) => {
-    const payload = request.body
+    const { empresa_id, branch_id, rol_id, ...payload } = request.body
 
     if (payload.password) {
       payload.password = await bcrypt.hash(payload.password, 10)
@@ -112,7 +177,7 @@ async function usuariosRoutes(fastify) {
   const accesosService = new GenericService(schema.usuario_accesos)
 
   // Obtener accesos de un usuario con joins para mostrar nombres legibles
-  fastify.get('/:id/accesos', { config: { permission: 'usuarios.accesos' } }, async (request, reply) => {
+  fastify.get('/:id/accesos', { config: { permission: 'usuarios.ver' } }, async (request, reply) => {
     const { eq } = require('drizzle-orm')
     const userId = request.params.id
 
@@ -138,7 +203,7 @@ async function usuariosRoutes(fastify) {
   })
 
   // Crear un nuevo acceso para un usuario
-  fastify.post('/:id/accesos', { config: { permission: 'usuarios.accesos' } }, async (request, reply) => {
+  fastify.post('/:id/accesos', { config: { permission: 'usuarios.editar' } }, async (request, reply) => {
     const userId = request.params.id
     const payload = { ...request.body, usuario_id: userId }
     
@@ -156,6 +221,15 @@ async function usuariosRoutes(fastify) {
       return reply.code(400).send({ message: 'El usuario ya tiene un acceso configurado para esta sucursal.' })
     }
 
+    // Validación de Jerarquía: No puede asignar un rol de nivel igual o superior al suyo
+    if (!request.user.es_super_admin && request.user.rol_nivel !== undefined) {
+      const [targetRol] = await db.select().from(schema.roles).where(eq(schema.roles.id, payload.rol_id))
+      if (!targetRol) return reply.code(400).send({ message: 'Rol inválido.' })
+      if (targetRol.nivel <= request.user.rol_nivel) {
+        return reply.code(403).send({ message: 'No puedes asignar un rol de nivel igual o superior al tuyo.' })
+      }
+    }
+
     // Si es predeterminado, quitar el flag a los demás
     if (payload.es_predeterminado) {
       await db.update(schema.usuario_accesos)
@@ -168,12 +242,30 @@ async function usuariosRoutes(fastify) {
   })
 
   // Actualizar un acceso existente
-  fastify.put('/:id/accesos/:accesoId', { config: { permission: 'usuarios.accesos' } }, async (request, reply) => {
+  fastify.put('/:id/accesos/:accesoId', { config: { permission: 'usuarios.editar' } }, async (request, reply) => {
     const userId = request.params.id
     const accesoId = request.params.accesoId
     const payload = request.body
 
     const { eq } = require('drizzle-orm')
+
+    // Validación de Jerarquía
+    if (!request.user.es_super_admin && request.user.rol_nivel !== undefined) {
+      const accesoActual = await accesosService.getById(accesoId)
+      if (!accesoActual) return reply.code(404).send({ message: 'Acceso no encontrado.' })
+
+      const [rolActual] = await db.select().from(schema.roles).where(eq(schema.roles.id, accesoActual.rol_id))
+      if (rolActual && rolActual.nivel <= request.user.rol_nivel) {
+        return reply.code(403).send({ message: 'No puedes modificar un acceso que tiene un rol de nivel igual o superior al tuyo.' })
+      }
+
+      if (payload.rol_id && payload.rol_id !== accesoActual.rol_id) {
+        const [nuevoRol] = await db.select().from(schema.roles).where(eq(schema.roles.id, payload.rol_id))
+        if (nuevoRol && nuevoRol.nivel <= request.user.rol_nivel) {
+          return reply.code(403).send({ message: 'No puedes asignar un rol de nivel igual o superior al tuyo.' })
+        }
+      }
+    }
 
     // Si se marca como predeterminado, quitar a los demás
     if (payload.es_predeterminado) {
@@ -187,7 +279,19 @@ async function usuariosRoutes(fastify) {
   })
 
   // Eliminar un acceso
-  fastify.delete('/:id/accesos/:accesoId', { config: { permission: 'usuarios.accesos' } }, async (request, reply) => {
+  fastify.delete('/:id/accesos/:accesoId', { config: { permission: 'usuarios.editar' } }, async (request, reply) => {
+    // Validación de Jerarquía
+    if (!request.user.es_super_admin && request.user.rol_nivel !== undefined) {
+      const accesoActual = await accesosService.getById(request.params.accesoId)
+      if (!accesoActual) return reply.code(404).send({ message: 'Acceso no encontrado.' })
+
+      const { eq } = require('drizzle-orm')
+      const [rolActual] = await db.select().from(schema.roles).where(eq(schema.roles.id, accesoActual.rol_id))
+      if (rolActual && rolActual.nivel <= request.user.rol_nivel) {
+        return reply.code(403).send({ message: 'No puedes eliminar un acceso de nivel igual o superior al tuyo.' })
+      }
+    }
+
     const data = await accesosService.remove(request.params.accesoId)
     return reply.code(200).send({ message: 'Acceso removido', data })
   })

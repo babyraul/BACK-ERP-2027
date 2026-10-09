@@ -38,7 +38,8 @@ async function login(fastify, usuario, password) {
       es_predeterminado: usuario_accesos.es_predeterminado,
       empresa_nombre: empresas.razon_social,
       sucursal_nombre: sucursales.nombre_comercial,
-      rol_nombre: roles.nombre
+      rol_nombre: roles.nombre,
+      rol_nivel: roles.nivel
     })
     .from(usuario_accesos)
     .innerJoin(empresas, eq(usuario_accesos.empresa_id, empresas.id))
@@ -62,6 +63,7 @@ async function login(fastify, usuario, password) {
     empresa_id: active_acceso?.empresa_id,
     branch_id: active_acceso?.branch_id,
     rol_id: active_acceso?.rol_id,
+    rol_nivel: active_acceso?.rol_nivel,
     permisos // Inyectado para validación en memoria O(1)
   }
 
@@ -253,7 +255,8 @@ async function switchBranch(fastify, userId, branchId) {
       es_predeterminado: usuario_accesos.es_predeterminado,
       empresa_nombre: empresas.razon_social,
       sucursal_nombre: sucursales.nombre_comercial,
-      rol_nombre: roles.nombre
+      rol_nombre: roles.nombre,
+      rol_nivel: roles.nivel
     })
     .from(usuario_accesos)
     .innerJoin(empresas, eq(usuario_accesos.empresa_id, empresas.id))
@@ -285,6 +288,7 @@ async function switchBranch(fastify, userId, branchId) {
     empresa_id: active_acceso?.empresa_id,
     branch_id: active_acceso?.branch_id,
     rol_id: active_acceso?.rol_id,
+    rol_nivel: active_acceso?.rol_nivel,
     permisos
   }
 

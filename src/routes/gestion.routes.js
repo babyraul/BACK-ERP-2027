@@ -27,8 +27,10 @@ async function gestionRoutes(fastify) {
   const rolesRoutes = require('./roles.routes')
   fastify.register(rolesRoutes, { prefix: '/roles' })
   
-  // Permisos (solo lectura / gestión directa opcional)
-  fastify.register(buildCrudRoutes(schema.permisos, { requireAdmin: true }), { prefix: '/permisos' })
+  // Permisos (solo lectura para asignar en roles)
+  fastify.register(buildCrudRoutes(schema.permisos, { 
+    permissionOverride: { read: 'roles.ver' } 
+  }), { prefix: '/permisos' })
 }
 
 module.exports = gestionRoutes

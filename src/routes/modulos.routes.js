@@ -13,9 +13,15 @@ async function modulosRoutes(fastify) {
     }
   }
 
+  const requireRolesVer = async (request, reply) => {
+    if (!request.user.es_super_admin && (!request.user.permisos || !request.user.permisos.includes('roles.ver'))) {
+      return reply.code(403).send({ message: 'Acceso restringido a administradores de roles.' })
+    }
+  }
+
   const modulosService = new GenericService(schema.modulos)
 
-  fastify.get('/', { preHandler: requireSuperAdmin }, async (request, reply) => {
+  fastify.get('/', { preHandler: requireRolesVer }, async (request, reply) => {
     const rawData = await modulosService.getAll(request.query)
     
     // Ordenar lógicamente: Padres primero según su orden, y luego sus hijos inmediatamente abajo según su orden
