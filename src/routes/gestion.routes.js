@@ -27,9 +27,9 @@ async function gestionRoutes(fastify) {
   const cajasRoutes = require('./cajas.routes')
   fastify.register(cajasRoutes, { prefix: '/cajas' })
 
-  // Tipos de Comprobante
-  const tiposComprobanteRoutes = require('./tiposComprobante.routes')
-  fastify.register(tiposComprobanteRoutes, { prefix: '/tipos-comprobante' })
+  // Categorías y Subcategorías
+  fastify.register(buildCrudRoutes(schema.categorias, { publicRead: true }), { prefix: '/categorias' })
+  fastify.register(buildCrudRoutes(schema.subcategoria, { publicRead: true }), { prefix: '/subcategorias' })
 
   // Roles y Permisos
   const rolesRoutes = require('./roles.routes')

@@ -17,6 +17,7 @@ const usuariosRoutes  = require('./routes/usuarios.routes')
 const syncRoutes      = require('./routes/sync.routes')
 const gestionRoutes   = require('./routes/gestion.routes')
 const utilsRoutes     = require('./routes/utils.routes')
+const tablasFijasRoutes = require('./routes/tablasFijas.routes')
 
 async function buildApp(opts = {}) {
   const app = Fastify({
@@ -44,6 +45,7 @@ async function buildApp(opts = {}) {
   await app.register(syncRoutes,      { prefix: '/api/sync' })
   await app.register(gestionRoutes,   { prefix: '/api' })
   await app.register(utilsRoutes,     { prefix: '/api/utils' })
+  await app.register(tablasFijasRoutes,{ prefix: '/api' })
 
   return app
 }

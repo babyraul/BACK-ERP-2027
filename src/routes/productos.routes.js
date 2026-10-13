@@ -1,88 +1,398 @@
 'use strict'
 
+const { db } = require('../db')
+const schema = require('../db/schema')
+const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
+
 /**
- * Rutas CRUD — Productos
- * Todas protegidas con JWT.
- * TODO: reemplazar fastify.sql con queries Drizzle cuando el schema esté listo.
- *
- * GET    /api/productos           → listar (paginado + filtros)
- * GET    /api/productos/:id       → obtener uno
- * POST   /api/productos           → crear
- * PUT    /api/productos/:id       → actualizar
- * DELETE /api/productos/:id       → soft delete
+ * Rutas CRUD de Productos con Drizzle ORM
+ * 
+ * Gestiona el catálogo de productos y su desglose de presentaciones/precios
+ * bajo Row-Level Security (RLS) por sucursal activa (`branch_id`).
  */
 async function productosRoutes(fastify) {
+  // Verificación de autenticación y autorización RBAC automática (productos.ver, etc.)
+  fastify.addHook('preHandler', fastify.authorize)
 
-  const auth = { preHandler: [fastify.authenticate] }
+  // ── GET /api/productos ──────────────────────────────────────────────────────────
+  fastify.get('/', async (request, reply) => {
+    const { q, categoria_id, activo } = request.query
+    const branchId = request.user?.branch_id
 
-  // ── GET / ──────────────────────────────────────────────────────────────────
-  fastify.get('/', auth, async (request) => {
-    const { page = 1, limit = 20, q = '' } = request.query
-    const offset = (page - 1) * limit
+    const conditions = []
 
-    // TODO: DB → SELECT con filtro por nombre/código, paginación, deleted_at IS NULL
-    return {
-      data:  [],
-      meta:  { page: Number(page), limit: Number(limit), total: 0 },
+    // RLS por sucursal si el usuario no es superadmin
+    if (!request.user.es_super_admin && branchId) {
+      conditions.push(or(eq(schema.productos.branch_id, branchId), sql`${schema.productos.branch_id} IS NULL`))
     }
+
+    if (activo !== undefined) {
+      conditions.push(eq(schema.productos.activo, activo === 'true' || activo === true))
+    }
+
+    if (categoria_id) {
+      conditions.push(eq(schema.productos.categoria, categoria_id))
+    }
+
+    if (q && q.trim() !== '') {
+      const search = `%${q.trim()}%`
+      conditions.push(
+        or(
+          ilike(schema.productos.nombre, search),
+          ilike(schema.productos.codigo_barra, search),
+          ilike(schema.productos.palabra_clave, search)
+        )
+      )
+    }
+
+    let query = db
+      .select({
+        id: schema.productos.id,
+        nombre: schema.productos.nombre,
+        descripcion: schema.productos.descripcion,
+        codigo_barra: schema.productos.codigo_barra,
+        palabra_clave: schema.productos.palabra_clave,
+        codigo_sunat: schema.productos.codigo_sunat,
+        unidad_medida_id: schema.productos.unidad_medida_id,
+        es_facturable: schema.productos.es_facturable,
+        es_vendible: schema.productos.es_vendible,
+        es_insumo: schema.productos.es_insumo,
+        es_producido: schema.productos.es_producido,
+        es_combo: schema.productos.es_combo,
+        activo: schema.productos.activo,
+        stock_minimo: schema.productos.stock_minimo,
+        categoria_id: schema.productos.categoria,
+        sub_categoria_id: schema.productos.sub_categoria,
+        tipo_existencia_id: schema.productos.tipo_existencia,
+        tipo_tributo_id: schema.productos.tipo_tributo,
+        branch_id: schema.productos.branch_id,
+        created_at: schema.productos.created_at,
+        updated_at: schema.productos.updated_at,
+        // Datos de Categoría
+        categoria_nombre: schema.categorias.nombre,
+        // Datos de Subcategoría
+        sub_categoria_nombre: schema.subcategoria.Nombre
+      })
+      .from(schema.productos)
+      .leftJoin(schema.categorias, eq(schema.productos.categoria, schema.categorias.id))
+      .leftJoin(schema.subcategoria, eq(schema.productos.sub_categoria, schema.subcategoria.id))
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions))
+    }
+
+    const productosRows = await query.orderBy(desc(schema.productos.created_at))
+
+    // Cargar presentaciones asociadas a los productos obtenidos
+    const prodIds = productosRows.map(p => p.id)
+    let presentacionesRows = []
+    if (prodIds.length > 0) {
+      const { inArray } = require('drizzle-orm')
+      presentacionesRows = await db
+        .select()
+        .from(schema.presentaciones)
+        .where(inArray(schema.presentaciones.producto_uuid, prodIds))
+    }
+
+    // Mapear presentaciones por producto
+    const presMap = {}
+    presentacionesRows.forEach(pres => {
+      if (!presMap[pres.producto_uuid]) presMap[pres.producto_uuid] = []
+      presMap[pres.producto_uuid].push({
+        id: pres.id,
+        nombre: pres.nombre,
+        cod_barra: pres.cod_barra,
+        multiplica_por: Number(pres.multiplica_por || 1),
+        precio_costo: Number(pres.precio_costo || 0),
+        precio_venta: Number(pres.precio_venta || 0),
+        precio_mayor: Number(pres.precio_mayor || 0),
+        precio_especial: Number(pres.precio_especial || 0),
+        precio_otros: Number(pres.precio_otros || 0),
+        activo: pres.activo
+      })
+    })
+
+    const data = productosRows.map(p => {
+      const pPres = presMap[p.id] || []
+      const principal = pPres[0] || null
+      return {
+        ...p,
+        presentaciones: pPres,
+        // Precios de la presentación por defecto para rápida referencia
+        precio_costo: principal ? principal.precio_costo : 0,
+        precio_venta: principal ? principal.precio_venta : 0,
+        precio_mayor: principal ? principal.precio_mayor : 0,
+        precio_especial: principal ? principal.precio_especial : 0
+      }
+    })
+
+    return reply.code(200).send({ data })
   })
 
-  // ── GET /:id ───────────────────────────────────────────────────────────────
-  fastify.get('/:id', auth, async (request, reply) => {
+  // ── GET /api/productos/:id ──────────────────────────────────────────────────────
+  fastify.get('/:id', async (request, reply) => {
     const { id } = request.params
-    // TODO: DB → SELECT WHERE id = $id AND deleted_at IS NULL
-    return reply.notFound(`Producto ${id} no encontrado.`)
+
+    const [producto] = await db
+      .select({
+        id: schema.productos.id,
+        nombre: schema.productos.nombre,
+        descripcion: schema.productos.descripcion,
+        codigo_barra: schema.productos.codigo_barra,
+        palabra_clave: schema.productos.palabra_clave,
+        codigo_sunat: schema.productos.codigo_sunat,
+        unidad_medida_id: schema.productos.unidad_medida_id,
+        es_facturable: schema.productos.es_facturable,
+        es_vendible: schema.productos.es_vendible,
+        es_insumo: schema.productos.es_insumo,
+        es_producido: schema.productos.es_producido,
+        es_combo: schema.productos.es_combo,
+        activo: schema.productos.activo,
+        stock_minimo: schema.productos.stock_minimo,
+        categoria_id: schema.productos.categoria,
+        sub_categoria_id: schema.productos.sub_categoria,
+        tipo_existencia_id: schema.productos.tipo_existencia,
+        tipo_tributo_id: schema.productos.tipo_tributo,
+        branch_id: schema.productos.branch_id,
+        created_at: schema.productos.created_at,
+        updated_at: schema.productos.updated_at,
+        categoria_nombre: schema.categorias.nombre,
+        sub_categoria_nombre: schema.subcategoria.Nombre
+      })
+      .from(schema.productos)
+      .leftJoin(schema.categorias, eq(schema.productos.categoria, schema.categorias.id))
+      .leftJoin(schema.subcategoria, eq(schema.productos.sub_categoria, schema.subcategoria.id))
+      .where(eq(schema.productos.id, id))
+
+    if (!producto) {
+      throw fastify.httpErrors.notFound(`Producto no encontrado`)
+    }
+
+    // Obtener todas sus presentaciones
+    const presRows = await db
+      .select()
+      .from(schema.presentaciones)
+      .where(eq(schema.presentaciones.producto_uuid, id))
+
+    const presentaciones = presRows.map(pres => ({
+      id: pres.id,
+      nombre: pres.nombre,
+      cod_barra: pres.cod_barra,
+      multiplica_por: Number(pres.multiplica_por || 1),
+      precio_costo: Number(pres.precio_costo || 0),
+      precio_venta: Number(pres.precio_venta || 0),
+      precio_mayor: Number(pres.precio_mayor || 0),
+      precio_especial: Number(pres.precio_especial || 0),
+      precio_otros: Number(pres.precio_otros || 0),
+      activo: pres.activo
+    }))
+
+    const principal = presentaciones[0] || null
+
+    return reply.code(200).send({
+      data: {
+        ...producto,
+        presentaciones,
+        precio_costo: principal ? principal.precio_costo : 0,
+        precio_venta: principal ? principal.precio_venta : 0,
+        precio_mayor: principal ? principal.precio_mayor : 0,
+        precio_especial: principal ? principal.precio_especial : 0
+      }
+    })
   })
 
-  // ── POST / ─────────────────────────────────────────────────────────────────
-  fastify.post('/', {
-    ...auth,
-    schema: {
-      body: {
-        type: 'object',
-        required: ['nombre', 'precio'],
-        properties: {
-          codigo:    { type: 'string' },
-          nombre:    { type: 'string', minLength: 2 },
-          precio:    { type: 'number', minimum: 0 },
-          stock:     { type: 'integer', minimum: 0 },
-          categoria_id: { type: 'string' },
-        },
-      },
-    },
-  }, async (request, reply) => {
-    const body = request.body
-    // TODO: DB → INSERT INTO productos (...) VALUES (...) RETURNING *
-    // TODO: SYNC → INSERT INTO sync_log (tabla, operacion, payload)
-    return reply.code(201).send({ message: 'Producto creado.', data: body })
+  // ── POST /api/productos ─────────────────────────────────────────────────────────
+  fastify.post('/', async (request, reply) => {
+    const payload = request.body
+    const branchId = payload.branch_id || request.user?.branch_id
+
+    if (!payload.nombre || payload.nombre.trim() === '') {
+      throw fastify.httpErrors.badRequest('El nombre del producto es obligatorio.')
+    }
+
+    // Validar presentaciones (por defecto debe haber al menos una inicial)
+    let presentacionesPayload = Array.isArray(payload.presentaciones) && payload.presentaciones.length > 0
+      ? payload.presentaciones
+      : [
+          {
+            nombre: payload.presentacion_nombre || 'UNIDAD',
+            cod_barra: payload.codigo_barra || null,
+            multiplica_por: 1,
+            precio_costo: Number(payload.precio_costo || 0),
+            precio_venta: Number(payload.precio_venta || 0),
+            precio_mayor: Number(payload.precio_mayor || 0),
+            precio_especial: Number(payload.precio_especial || 0),
+            precio_otros: Number(payload.precio_otros || 0),
+            activo: true
+          }
+        ]
+
+    const cleanUuid = (val) => {
+      if (!val || typeof val !== 'string') return null
+      const trimmed = val.trim()
+      // Regex estándar para UUID v4 / UUID canónico
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      return uuidRegex.test(trimmed) ? trimmed : null
+    }
+
+    const result = await db.transaction(async (tx) => {
+      // 1. Insertar Producto
+      const [nuevoProducto] = await tx
+        .insert(schema.productos)
+        .values({
+          nombre: payload.nombre.trim(),
+          descripcion: payload.descripcion || null,
+          codigo_barra: payload.codigo_barra || null,
+          palabra_clave: payload.palabra_clave || null,
+          unidad_medida_id: payload.unidad_medida_id || 'NIU',
+          codigo_sunat: payload.codigo_sunat || null,
+          es_facturable: payload.es_facturable ?? true,
+          es_vendible: payload.es_vendible ?? true,
+          es_insumo: payload.es_insumo ?? false,
+          es_producido: payload.es_producido ?? false,
+          es_combo: payload.es_combo ?? false,
+          activo: payload.activo ?? true,
+          stock_minimo: Number(payload.stock_minimo || 0),
+          categoria: cleanUuid(payload.categoria_id),
+          sub_categoria: cleanUuid(payload.sub_categoria_id),
+          tipo_existencia: cleanUuid(payload.tipo_existencia_id),
+          tipo_tributo: cleanUuid(payload.tipo_tributo_id),
+          branch_id: cleanUuid(branchId)
+        })
+        .returning()
+
+      // 2. Insertar Presentaciones asociadas
+      const presInsertadas = []
+      for (const pres of presentacionesPayload) {
+        const [pRow] = await tx
+          .insert(schema.presentaciones)
+          .values({
+            producto_uuid: nuevoProducto.id,
+            nombre: pres.nombre || 'UNIDAD',
+            cod_barra: pres.cod_barra || payload.codigo_barra || null,
+            multiplica_por: Number(pres.multiplica_por || 1),
+            precio_costo: Number(pres.precio_costo || 0),
+            precio_venta: Number(pres.precio_venta || 0),
+            precio_mayor: Number(pres.precio_mayor || 0),
+            precio_especial: Number(pres.precio_especial || 0),
+            precio_otros: Number(pres.precio_otros || 0),
+            activo: pres.activo ?? true
+          })
+          .returning()
+        presInsertadas.push(pRow)
+      }
+
+      return {
+        ...nuevoProducto,
+        presentaciones: presInsertadas
+      }
+    })
+
+    return reply.code(201).send({ message: 'Producto registrado exitosamente', data: result })
   })
 
-  // ── PUT /:id ───────────────────────────────────────────────────────────────
-  fastify.put('/:id', {
-    ...auth,
-    schema: {
-      body: {
-        type: 'object',
-        properties: {
-          nombre: { type: 'string' },
-          precio: { type: 'number' },
-          stock:  { type: 'integer' },
-        },
-      },
-    },
-  }, async (request, reply) => {
+  // ── PUT /api/productos/:id ──────────────────────────────────────────────────────
+  fastify.put('/:id', async (request, reply) => {
     const { id } = request.params
-    // TODO: DB → UPDATE productos SET ...body, updated_at = now() WHERE id = $id
-    // TODO: SYNC → INSERT INTO sync_log
-    return { message: `Producto ${id} actualizado.`, data: request.body }
+    const payload = request.body
+
+    const [existente] = await db.select().from(schema.productos).where(eq(schema.productos.id, id))
+    if (!existente) {
+      throw fastify.httpErrors.notFound('Producto no encontrado')
+    }
+
+    const cleanUuid = (val) => {
+      if (!val || typeof val !== 'string') return null
+      const trimmed = val.trim()
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      return uuidRegex.test(trimmed) ? trimmed : null
+    }
+
+    const result = await db.transaction(async (tx) => {
+      // 1. Actualizar Producto
+      const [prodActualizado] = await tx
+        .update(schema.productos)
+        .set({
+          nombre: payload.nombre !== undefined ? payload.nombre.trim() : existente.nombre,
+          descripcion: payload.descripcion !== undefined ? (payload.descripcion || null) : existente.descripcion,
+          codigo_barra: payload.codigo_barra !== undefined ? (payload.codigo_barra || null) : existente.codigo_barra,
+          palabra_clave: payload.palabra_clave !== undefined ? (payload.palabra_clave || null) : existente.palabra_clave,
+          unidad_medida_id: payload.unidad_medida_id !== undefined ? payload.unidad_medida_id : existente.unidad_medida_id,
+          codigo_sunat: payload.codigo_sunat !== undefined ? (payload.codigo_sunat || null) : existente.codigo_sunat,
+          es_facturable: payload.es_facturable !== undefined ? payload.es_facturable : existente.es_facturable,
+          es_vendible: payload.es_vendible !== undefined ? payload.es_vendible : existente.es_vendible,
+          es_insumo: payload.es_insumo !== undefined ? payload.es_insumo : existente.es_insumo,
+          es_producido: payload.es_producido !== undefined ? payload.es_producido : existente.es_producido,
+          es_combo: payload.es_combo !== undefined ? payload.es_combo : existente.es_combo,
+          activo: payload.activo !== undefined ? payload.activo : existente.activo,
+          stock_minimo: payload.stock_minimo !== undefined ? Number(payload.stock_minimo) : existente.stock_minimo,
+          categoria: payload.categoria_id !== undefined ? cleanUuid(payload.categoria_id) : existente.categoria,
+          sub_categoria: payload.sub_categoria_id !== undefined ? cleanUuid(payload.sub_categoria_id) : existente.sub_categoria,
+          tipo_existencia: payload.tipo_existencia_id !== undefined ? cleanUuid(payload.tipo_existencia_id) : existente.tipo_existencia,
+          tipo_tributo: payload.tipo_tributo_id !== undefined ? cleanUuid(payload.tipo_tributo_id) : existente.tipo_tributo,
+          updated_at: new Date().toISOString()
+        })
+        .where(eq(schema.productos.id, id))
+        .returning()
+        .where(eq(schema.productos.id, id))
+        .returning()
+
+      // 2. Gestionar Presentaciones (Si se enviaron en el payload)
+      let presActualizadas = []
+      if (Array.isArray(payload.presentaciones) && payload.presentaciones.length > 0) {
+        // Eliminar presentaciones previas o sincronizar
+        await tx.delete(schema.presentaciones).where(eq(schema.presentaciones.producto_uuid, id))
+
+        for (const pres of payload.presentaciones) {
+          const [pRow] = await tx
+            .insert(schema.presentaciones)
+            .values({
+              producto_uuid: id,
+              nombre: pres.nombre || 'UNIDAD',
+              cod_barra: pres.cod_barra || payload.codigo_barra || null,
+              multiplica_por: Number(pres.multiplica_por || 1),
+              precio_costo: Number(pres.precio_costo || 0),
+              precio_venta: Number(pres.precio_venta || 0),
+              precio_mayor: Number(pres.precio_mayor || 0),
+              precio_especial: Number(pres.precio_especial || 0),
+              precio_otros: Number(pres.precio_otros || 0),
+              activo: pres.activo ?? true
+            })
+            .returning()
+          presActualizadas.push(pRow)
+        }
+      } else {
+        // Si no se envió array, recuperar las existentes
+        presActualizadas = await tx
+          .select()
+          .from(schema.presentaciones)
+          .where(eq(schema.presentaciones.producto_uuid, id))
+      }
+
+      return {
+        ...prodActualizado,
+        presentaciones: presActualizadas
+      }
+    })
+
+    return reply.code(200).send({ message: 'Producto actualizado exitosamente', data: result })
   })
 
-  // ── DELETE /:id ────────────────────────────────────────────────────────────
-  fastify.delete('/:id', auth, async (request, reply) => {
+  // ── DELETE /api/productos/:id ───────────────────────────────────────────────────
+  fastify.delete('/:id', async (request, reply) => {
     const { id } = request.params
-    // TODO: DB → UPDATE productos SET deleted_at = now() WHERE id = $id
-    // TODO: SYNC → INSERT INTO sync_log (operacion: 'delete')
-    return { message: `Producto ${id} eliminado.` }
+
+    const [producto] = await db
+      .update(schema.productos)
+      .set({ activo: false, updated_at: new Date().toISOString() })
+      .where(eq(schema.productos.id, id))
+      .returning()
+
+    if (!producto) {
+      throw fastify.httpErrors.notFound('Producto no encontrado')
+    }
+
+    return reply.code(200).send({ message: 'Producto dado de baja exitosamente', data: producto })
   })
 }
 

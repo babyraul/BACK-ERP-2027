@@ -218,16 +218,29 @@ BACK/
 
 ---
 
-### 2.8 Tipos de Comprobante (`/api/tipos-comprobante`)
-*Archivo: `src/routes/tiposComprobante.routes.js`* · *Generado vía: `crud.factory.js` sobre `schema.tipo_comprobante` con `publicRead: true`*
+### 2.8 Tablas Fijas y Catálogos SUNAT (`/api/tipos-*`)
+*Archivo: `src/routes/tablasFijas.routes.js`* · *Generado vía: `crud.factory.js` sobre tablas maestras con `publicRead: true`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
-| :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/tipos-comprobante` | Bearer JWT | Libre para autenticados (`publicRead`) | Catálogo maestro SUNAT de tipos de comprobante (Factura, Boleta, Nota de Crédito, etc.). Lectura permitida a cualquier usuario autenticado sin requerir permisos granulares específicos. |
-| `GET` | `/api/tipos-comprobante/:id`| Bearer JWT | Libre para autenticados (`publicRead`) | Obtiene el detalle de un comprobante por código (ej. `01`, `03`). |
-| `POST` | `/api/tipos-comprobante` | Bearer JWT | `tipos-comprobante.crear` | Registra un nuevo tipo de comprobante en el catálogo. |
-| `PUT` | `/api/tipos-comprobante/:id`| Bearer JWT | `tipos-comprobante.editar` | Actualiza descripción o abreviatura. |
-| `DELETE`| `/api/tipos-comprobante/:id`| Bearer JWT | `tipos-comprobante.eliminar`| Elimina un tipo de comprobante. |
+Centraliza todos los catálogos estáticos y tablas fijas del sistema y de SUNAT con acceso de lectura libre para cualquier usuario autenticado (`publicRead: true`), eliminando la necesidad de permisos granulares por módulo.
+
+| Endpoint Base | Tabla Schema | Catálogo / Propósito |
+| :--- | :--- | :--- |
+| `GET /api/tipos-comprobante` | `tipo_comprobante` | Factura (`01`), Boleta (`03`), Nota de Crédito (`07`), etc. |
+| `GET /api/tipos-documento` | `tipo_documento` | DNI (`1`), RUC (`6`), Pasaporte (`7`), Carné Extranjería (`4`), etc. |
+| `GET /api/tipos-afectacion-igv` | `tipo_afectacion_igv` | Gravado (`10`), Exonerado (`20`), Inafecto (`30`), Exportación (`40`), etc. |
+| `GET /api/tipos-unidades-medida` | `tipo_unidades_medida` | Unidades comerciales SUNAT (`NIU`, `KGM`, `LTR`, `ZZ`, etc.). |
+| `GET /api/tipos-moneda` | `tipo_moneda` | Monedas internacionales (`PEN`, `USD`, `EUR`). |
+| `GET /api/tipos-metodo-pago` | `tipo_metodo_pago` | Medios de pago (`Efectivo`, `Yape`, `Plin`, `Transferencia`, etc.). |
+| `GET /api/tipos-pago` | `tipo_pago` | Condiciones de pago comercial (`Contado`, `Crédito`). |
+| `GET /api/tipos-operacion` | `tipo_operacion` | Operaciones de venta SUNAT (`Venta Interna`, `Exportación`, etc.). |
+| `GET /api/tipos-tributos` | `tipo_tributos` | Tributos e impuestos fiscales (`IGV`, `ISC`, `IVAP`). |
+| `GET /api/tipos-existencia` | `tipo_existencia` | Tipos de inventario (`Mercadería`, `Materia Prima`, `Envases`, etc.). |
+| `GET /api/tipos-impuesto` | `tipo_impuesto` | Impuestos parametrizados y alícuotas del sistema. |
+| `GET /api/tipos-factores` | `tipo_factores` | Factores de cálculo y recargos comerciales. |
+| `GET /api/tipos-stock` | `tipo_stock` | Estados de inventario (`Físico`, `Comprometido`). |
+| `GET /api/tipos-motivo-traslado` | `tipo_motivo_traslado` | Motivos de guías de remisión (`Venta`, `Compra`, `Traslado sede`). |
+| `GET /api/tipos-detraccion` | `tipo_codigos_detraccion` | Bienes y servicios sujetos al SPOT / Detracciones SUNAT. |
+| `GET /api/tipos-cambio` | `tipo_cambio` | Histórico y cotización oficial de tipo de cambio. |
 
 ---
 
