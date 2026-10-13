@@ -33,8 +33,28 @@ function buildCrudRoutes(table, options = {}) {
     const schemas = options.schemas || {}
     const permissionOverride = options.permissionOverride || {}
 
+    // Resuelve la configuración de seguridad por acción (read, create, update, delete)
+    const getActionConfig = (action) => {
+      if (options.public) return { public: true }
+      if (action === 'read' && options.publicRead) return { public: true }
+
+      const override = permissionOverride[action]
+        || (action === 'read' ? permissionOverride.GET : undefined)
+        || (action === 'create' ? permissionOverride.POST : undefined)
+        || (action === 'update' ? (permissionOverride.PUT || permissionOverride.PATCH) : undefined)
+        || (action === 'delete' ? permissionOverride.DELETE : undefined)
+
+      if (override === true || override === 'public') {
+        return { public: true }
+      }
+      if (typeof override === 'string') {
+        return { permission: override }
+      }
+      return {}
+    }
+
     // GET /
-    fastify.get('/', { preHandler: getPreHandlers('read'), schema: schemas.read, config: { permission: permissionOverride.read } }, async (request, reply) => {
+    fastify.get('/', { preHandler: getPreHandlers('read'), schema: schemas.read, config: getActionConfig('read') }, async (request, reply) => {
       const query = { ...request.query }
       
       // ── Row-Level Security (RLS) Genérica ──
@@ -53,7 +73,7 @@ function buildCrudRoutes(table, options = {}) {
     })
 
     // GET /:id
-    fastify.get('/:id', { preHandler: getPreHandlers('read'), schema: schemas.read, config: { permission: permissionOverride.read } }, async (request, reply) => {
+    fastify.get('/:id', { preHandler: getPreHandlers('read'), schema: schemas.read, config: getActionConfig('read') }, async (request, reply) => {
       const { id } = request.params
       const data = await service.getById(id)
       if (!data) throw fastify.httpErrors.notFound(`Registro no encontrado`)
@@ -61,7 +81,7 @@ function buildCrudRoutes(table, options = {}) {
     })
 
     // POST /
-    fastify.post('/', { preHandler: getPreHandlers('create'), schema: schemas.create, config: { permission: permissionOverride.create } }, async (request, reply) => {
+    fastify.post('/', { preHandler: getPreHandlers('create'), schema: schemas.create, config: getActionConfig('create') }, async (request, reply) => {
       const payload = { ...request.body }
       
       // Auto-completar contexto (RLS)
@@ -79,7 +99,7 @@ function buildCrudRoutes(table, options = {}) {
     })
 
     // PUT /:id
-    fastify.put('/:id', { preHandler: getPreHandlers('update'), schema: schemas.update, config: { permission: permissionOverride.update } }, async (request, reply) => {
+    fastify.put('/:id', { preHandler: getPreHandlers('update'), schema: schemas.update, config: getActionConfig('update') }, async (request, reply) => {
       const { id } = request.params
       const existing = await service.getById(id)
       if (!existing) throw fastify.httpErrors.notFound(`Registro no encontrado`)
@@ -89,7 +109,7 @@ function buildCrudRoutes(table, options = {}) {
     })
 
     // DELETE /:id
-    fastify.delete('/:id', { preHandler: getPreHandlers('delete'), schema: schemas.delete, config: { permission: permissionOverride.delete } }, async (request, reply) => {
+    fastify.delete('/:id', { preHandler: getPreHandlers('delete'), schema: schemas.delete, config: getActionConfig('delete') }, async (request, reply) => {
       const { id } = request.params
       const existing = await service.getById(id)
       if (!existing) throw fastify.httpErrors.notFound(`Registro no encontrado`)

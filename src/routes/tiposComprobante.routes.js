@@ -4,11 +4,9 @@ const buildCrudRoutes = require('../core/crud.factory')
 const schema = require('../db/schema')
 
 async function tiposComprobanteRoutes(fastify) {
-  // Catálogo de lectura global
+  // Catálogo maestro SUNAT: lectura libre para cualquier usuario autenticado
   const crud = buildCrudRoutes(schema.tipo_comprobante, {
-    permissionOverride: {
-      GET: 'cajas.ver' // Permite a cualquiera con permiso de ver cajas poder ver este catálogo
-    }
+    publicRead: true
   })
   await crud(fastify)
 }
