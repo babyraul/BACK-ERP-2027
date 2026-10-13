@@ -52,6 +52,7 @@ async function productosRoutes(fastify) {
       conditions.push(
         or(
           ilike(schema.productos.nombre, search),
+          ilike(schema.productos.codigo, search),
           ilike(schema.productos.codigo_barra, search),
           ilike(schema.productos.palabra_clave, search)
         )
@@ -61,6 +62,7 @@ async function productosRoutes(fastify) {
     let query = db
       .select({
         id: schema.productos.id,
+        codigo: schema.productos.codigo,
         nombre: schema.productos.nombre,
         descripcion: schema.productos.descripcion,
         codigo_barra: schema.productos.codigo_barra,
@@ -158,6 +160,7 @@ async function productosRoutes(fastify) {
     const [producto] = await db
       .select({
         id: schema.productos.id,
+        codigo: schema.productos.codigo,
         nombre: schema.productos.nombre,
         descripcion: schema.productos.descripcion,
         codigo_barra: schema.productos.codigo_barra,
@@ -266,7 +269,7 @@ async function productosRoutes(fastify) {
     }
 
     const result = await db.transaction(async (tx) => {
-      // 1. Insertar Producto (stock_minimo se guarda como número entero)
+      // 1. Insertar Producto (stock_minimo se guarda como número entero, codigo es autogenerado por BD)
       const [nuevoProducto] = await tx
         .insert(schema.productos)
         .values({
@@ -349,7 +352,7 @@ async function productosRoutes(fastify) {
     }
 
     const result = await db.transaction(async (tx) => {
-      // 1. Actualizar Producto
+      // 1. Actualizar Producto (el codigo autogenerado no se sobreescribe)
       const [prodActualizado] = await tx
         .update(schema.productos)
         .set({

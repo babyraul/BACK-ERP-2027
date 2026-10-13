@@ -599,6 +599,7 @@ const productos = (0, import_pg_core.pgTable)("productos", {
   created_at: (0, import_pg_core.timestamp)("created_at", { withTimezone: true, mode: "string" }).defaultNow(),
   updated_at: (0, import_pg_core.timestamp)("updated_at", { withTimezone: true, mode: "string" }).defaultNow(),
   codigo_sunat: (0, import_pg_core.varchar)("codigo_sunat", { length: 50 }),
+  codigo: (0, import_pg_core.varchar)("codigo", { length: 8 }),
   stock_minimo: (0, import_pg_core.integer)("stock_minimo").default(0),
   categoria: (0, import_pg_core.uuid)("categoria"),
   sub_categoria: (0, import_pg_core.uuid)("sub_categoria"),
