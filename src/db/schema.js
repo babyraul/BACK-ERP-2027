@@ -175,7 +175,7 @@ const clientes = (0, import_pg_core.pgTable)(
     telefono_1: (0, import_pg_core.varchar)("telefono_1", { length: 20 }),
     telefono_2: (0, import_pg_core.varchar)("telefono_2", { length: 20 }),
     telefono_3: (0, import_pg_core.varchar)("telefono_3", { length: 20 }),
-    branch_id: (0, import_pg_core.uuid)("branch_id"),
+    empresa_id: (0, import_pg_core.uuid)("empresa_id"),
     sincronizado: (0, import_pg_core.boolean)("sincronizado").default(false),
     created_at: (0, import_pg_core.timestamp)("created_at", { mode: "string" }).defaultNow(),
     updated_at: (0, import_pg_core.timestamp)("updated_at", { mode: "string" }).defaultNow(),
@@ -189,7 +189,7 @@ const clientes = (0, import_pg_core.pgTable)(
   },
   (table) => {
     return {
-      idx_clientes_branch: (0, import_pg_core.index)("idx_clientes_branch").using("btree", table.branch_id),
+      idx_clientes_empresa: (0, import_pg_core.index)("idx_clientes_empresa").using("btree", table.empresa_id),
       idx_clientes_email1: (0, import_pg_core.index)("idx_clientes_email1").using("btree", table.email_1),
       idx_clientes_email2: (0, import_pg_core.index)("idx_clientes_email2").using("btree", table.email_2),
       idx_clientes_email3: (0, import_pg_core.index)("idx_clientes_email3").using("btree", table.email_3),
@@ -583,7 +583,7 @@ const almacenes = (0, import_pg_core.pgTable)("almacenes", {
 });
 const productos = (0, import_pg_core.pgTable)("productos", {
   id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
-  branch_id: (0, import_pg_core.uuid)("branch_id"),
+  empresa_id: (0, import_pg_core.uuid)("empresa_id"),
   nombre: (0, import_pg_core.varchar)("nombre", { length: 150 }).notNull(),
   descripcion: (0, import_pg_core.text)("descripcion"),
   palabra_clave: (0, import_pg_core.varchar)("palabra_clave", { length: 255 }),
@@ -602,8 +602,8 @@ const productos = (0, import_pg_core.pgTable)("productos", {
   stock_minimo: (0, import_pg_core.integer)("stock_minimo").default(0),
   categoria: (0, import_pg_core.uuid)("categoria"),
   sub_categoria: (0, import_pg_core.uuid)("sub_categoria"),
-  tipo_existencia: (0, import_pg_core.uuid)("tipo_existencia"),
-  tipo_tributo: (0, import_pg_core.uuid)("tipo_tributo")
+  tipo_existencia: (0, import_pg_core.varchar)("tipo_existencia", { length: 5 }),
+  tipo_tributo: (0, import_pg_core.varchar)("tipo_tributo", { length: 5 })
 });
 const presentaciones = (0, import_pg_core.pgTable)("presentaciones", {
   id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
@@ -673,7 +673,7 @@ const proveedores = (0, import_pg_core.pgTable)(
   "proveedores",
   {
     id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
-    branch_id: (0, import_pg_core.uuid)("branch_id"),
+    empresa_id: (0, import_pg_core.uuid)("empresa_id"),
     ruc: (0, import_pg_core.varchar)("ruc", { length: 11 }).notNull(),
     razon_social: (0, import_pg_core.varchar)("razon_social", { length: 200 }).notNull(),
     nombre_comercial: (0, import_pg_core.varchar)("nombre_comercial", { length: 200 }),
@@ -707,7 +707,7 @@ const productos_proveedores = (0, import_pg_core.pgTable)("productos_proveedores
 });
 const categorias = (0, import_pg_core.pgTable)("categorias", {
   id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
-  branch_id: (0, import_pg_core.uuid)("branch_id"),
+  empresa_id: (0, import_pg_core.uuid)("empresa_id"),
   nombre: (0, import_pg_core.varchar)("nombre", { length: 50 }).notNull(),
   activo: (0, import_pg_core.boolean)("activo").default(true).notNull(),
   sincronizado: (0, import_pg_core.boolean)("sincronizado").default(true),

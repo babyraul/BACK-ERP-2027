@@ -8,22 +8,35 @@ const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
  * Rutas CRUD de Productos con Drizzle ORM
  * 
  * Gestiona el catálogo de productos y su desglose de presentaciones/precios
- * bajo Row-Level Security (RLS) por sucursal activa (`branch_id`).
+ * aplicando factores de conversión (PRECIO x100 en céntimos, VOLUMEN x1000000)
+ * bajo Row-Level Security (RLS) por empresa activa (`empresa_id`).
  */
 async function productosRoutes(fastify) {
   // Verificación de autenticación y autorización RBAC automática (productos.ver, etc.)
   fastify.addHook('preHandler', fastify.authorize)
 
+  // Obtener factores de conversión del sistema (default PRECIO: 100, VOLUMEN: 1000000)
+  const getFactores = async () => {
+    try {
+      const factoresRows = await db.select().from(schema.tipo_factores)
+      const fPrecio = factoresRows.find(f => f.codigo === 'PRECIO')?.valor || 100
+      const fVolumen = factoresRows.find(f => f.codigo === 'VOLUMEN')?.valor || 1000000
+      return { factorPrecio: Number(fPrecio), factorVolumen: Number(fVolumen) }
+    } catch (e) {
+      return { factorPrecio: 100, factorVolumen: 1000000 }
+    }
+  }
+
   // ── GET /api/productos ──────────────────────────────────────────────────────────
   fastify.get('/', async (request, reply) => {
     const { q, categoria_id, activo } = request.query
-    const branchId = request.user?.branch_id
+    const empresaId = request.user?.empresa_id || request.user?.branch_id
 
     const conditions = []
 
-    // RLS por sucursal si el usuario no es superadmin
-    if (!request.user.es_super_admin && branchId) {
-      conditions.push(or(eq(schema.productos.branch_id, branchId), sql`${schema.productos.branch_id} IS NULL`))
+    // RLS por empresa si el usuario no es superadmin
+    if (!request.user.es_super_admin && empresaId) {
+      conditions.push(or(eq(schema.productos.empresa_id, empresaId), sql`${schema.productos.empresa_id} IS NULL`))
     }
 
     if (activo !== undefined) {
@@ -65,7 +78,7 @@ async function productosRoutes(fastify) {
         sub_categoria_id: schema.productos.sub_categoria,
         tipo_existencia_id: schema.productos.tipo_existencia,
         tipo_tributo_id: schema.productos.tipo_tributo,
-        branch_id: schema.productos.branch_id,
+        empresa_id: schema.productos.empresa_id,
         created_at: schema.productos.created_at,
         updated_at: schema.productos.updated_at,
         // Datos de Categoría
@@ -83,6 +96,8 @@ async function productosRoutes(fastify) {
 
     const productosRows = await query.orderBy(desc(schema.productos.created_at))
 
+    const { factorPrecio, factorVolumen } = await getFactores()
+
     // Cargar presentaciones asociadas a los productos obtenidos
     const prodIds = productosRows.map(p => p.id)
     let presentacionesRows = []
@@ -94,7 +109,7 @@ async function productosRoutes(fastify) {
         .where(inArray(schema.presentaciones.producto_uuid, prodIds))
     }
 
-    // Mapear presentaciones por producto
+    // Mapear presentaciones por producto convirtiendo de entero (BD) a decimal visual
     const presMap = {}
     presentacionesRows.forEach(pres => {
       if (!presMap[pres.producto_uuid]) presMap[pres.producto_uuid] = []
@@ -103,11 +118,15 @@ async function productosRoutes(fastify) {
         nombre: pres.nombre,
         cod_barra: pres.cod_barra,
         multiplica_por: Number(pres.multiplica_por || 1),
-        precio_costo: Number(pres.precio_costo || 0),
-        precio_venta: Number(pres.precio_venta || 0),
-        precio_mayor: Number(pres.precio_mayor || 0),
-        precio_especial: Number(pres.precio_especial || 0),
-        precio_otros: Number(pres.precio_otros || 0),
+        // Conversión con factor de precio (céntimos -> decimal)
+        precio_costo: Number(pres.precio_costo || 0) / factorPrecio,
+        precio_venta: Number(pres.precio_venta || 0) / factorPrecio,
+        precio_mayor: Number(pres.precio_mayor || 0) / factorPrecio,
+        precio_especial: Number(pres.precio_especial || 0) / factorPrecio,
+        precio_otros: Number(pres.precio_otros || 0) / factorPrecio,
+        // Montos en entero original almacenados en la BD
+        precio_costo_raw: Number(pres.precio_costo || 0),
+        precio_venta_raw: Number(pres.precio_venta || 0),
         activo: pres.activo
       })
     })
@@ -117,8 +136,10 @@ async function productosRoutes(fastify) {
       const principal = pPres[0] || null
       return {
         ...p,
+        // Conversión con factor de volumen si aplica en stock mínimo
+        stock_minimo_raw: Number(p.stock_minimo || 0),
         presentaciones: pPres,
-        // Precios de la presentación por defecto para rápida referencia
+        // Precios de la presentación por defecto para rápida referencia (decimales)
         precio_costo: principal ? principal.precio_costo : 0,
         precio_venta: principal ? principal.precio_venta : 0,
         precio_mayor: principal ? principal.precio_mayor : 0,
@@ -126,12 +147,13 @@ async function productosRoutes(fastify) {
       }
     })
 
-    return reply.code(200).send({ data })
+    return reply.code(200).send({ data, factores: { factorPrecio, factorVolumen } })
   })
 
   // ── GET /api/productos/:id ──────────────────────────────────────────────────────
   fastify.get('/:id', async (request, reply) => {
     const { id } = request.params
+    const { factorPrecio, factorVolumen } = await getFactores()
 
     const [producto] = await db
       .select({
@@ -153,7 +175,7 @@ async function productosRoutes(fastify) {
         sub_categoria_id: schema.productos.sub_categoria,
         tipo_existencia_id: schema.productos.tipo_existencia,
         tipo_tributo_id: schema.productos.tipo_tributo,
-        branch_id: schema.productos.branch_id,
+        empresa_id: schema.productos.empresa_id,
         created_at: schema.productos.created_at,
         updated_at: schema.productos.updated_at,
         categoria_nombre: schema.categorias.nombre,
@@ -179,11 +201,13 @@ async function productosRoutes(fastify) {
       nombre: pres.nombre,
       cod_barra: pres.cod_barra,
       multiplica_por: Number(pres.multiplica_por || 1),
-      precio_costo: Number(pres.precio_costo || 0),
-      precio_venta: Number(pres.precio_venta || 0),
-      precio_mayor: Number(pres.precio_mayor || 0),
-      precio_especial: Number(pres.precio_especial || 0),
-      precio_otros: Number(pres.precio_otros || 0),
+      precio_costo: Number(pres.precio_costo || 0) / factorPrecio,
+      precio_venta: Number(pres.precio_venta || 0) / factorPrecio,
+      precio_mayor: Number(pres.precio_mayor || 0) / factorPrecio,
+      precio_especial: Number(pres.precio_especial || 0) / factorPrecio,
+      precio_otros: Number(pres.precio_otros || 0) / factorPrecio,
+      precio_costo_raw: Number(pres.precio_costo || 0),
+      precio_venta_raw: Number(pres.precio_venta || 0),
       activo: pres.activo
     }))
 
@@ -192,23 +216,27 @@ async function productosRoutes(fastify) {
     return reply.code(200).send({
       data: {
         ...producto,
+        stock_minimo_raw: Number(producto.stock_minimo || 0),
         presentaciones,
         precio_costo: principal ? principal.precio_costo : 0,
         precio_venta: principal ? principal.precio_venta : 0,
         precio_mayor: principal ? principal.precio_mayor : 0,
         precio_especial: principal ? principal.precio_especial : 0
-      }
+      },
+      factores: { factorPrecio, factorVolumen }
     })
   })
 
   // ── POST /api/productos ─────────────────────────────────────────────────────────
   fastify.post('/', async (request, reply) => {
     const payload = request.body
-    const branchId = payload.branch_id || request.user?.branch_id
+    const empresaId = payload.empresa_id || request.user?.empresa_id || payload.branch_id || request.user?.branch_id
 
     if (!payload.nombre || payload.nombre.trim() === '') {
       throw fastify.httpErrors.badRequest('El nombre del producto es obligatorio.')
     }
+
+    const { factorPrecio } = await getFactores()
 
     // Validar presentaciones (por defecto debe haber al menos una inicial)
     let presentacionesPayload = Array.isArray(payload.presentaciones) && payload.presentaciones.length > 0
@@ -227,6 +255,8 @@ async function productosRoutes(fastify) {
           }
         ]
 
+    const toCentimos = (val) => Math.round(Number(val || 0) * factorPrecio)
+
     const cleanUuid = (val) => {
       if (!val || typeof val !== 'string') return null
       const trimmed = val.trim()
@@ -236,7 +266,7 @@ async function productosRoutes(fastify) {
     }
 
     const result = await db.transaction(async (tx) => {
-      // 1. Insertar Producto
+      // 1. Insertar Producto (stock_minimo se guarda como número entero)
       const [nuevoProducto] = await tx
         .insert(schema.productos)
         .values({
@@ -252,16 +282,16 @@ async function productosRoutes(fastify) {
           es_producido: payload.es_producido ?? false,
           es_combo: payload.es_combo ?? false,
           activo: payload.activo ?? true,
-          stock_minimo: Number(payload.stock_minimo || 0),
+          stock_minimo: Math.round(Number(payload.stock_minimo || 0)),
           categoria: cleanUuid(payload.categoria_id),
           sub_categoria: cleanUuid(payload.sub_categoria_id),
-          tipo_existencia: cleanUuid(payload.tipo_existencia_id),
-          tipo_tributo: cleanUuid(payload.tipo_tributo_id),
-          branch_id: cleanUuid(branchId)
+          tipo_existencia: payload.tipo_existencia_id && String(payload.tipo_existencia_id).trim() !== '' ? String(payload.tipo_existencia_id).trim() : null,
+          tipo_tributo: payload.tipo_tributo_id && String(payload.tipo_tributo_id).trim() !== '' ? String(payload.tipo_tributo_id).trim() : null,
+          empresa_id: cleanUuid(empresaId)
         })
         .returning()
 
-      // 2. Insertar Presentaciones asociadas
+      // 2. Insertar Presentaciones asociadas multiplicadas por factorPrecio (céntimos en BD)
       const presInsertadas = []
       for (const pres of presentacionesPayload) {
         const [pRow] = await tx
@@ -271,15 +301,22 @@ async function productosRoutes(fastify) {
             nombre: pres.nombre || 'UNIDAD',
             cod_barra: pres.cod_barra || payload.codigo_barra || null,
             multiplica_por: Number(pres.multiplica_por || 1),
-            precio_costo: Number(pres.precio_costo || 0),
-            precio_venta: Number(pres.precio_venta || 0),
-            precio_mayor: Number(pres.precio_mayor || 0),
-            precio_especial: Number(pres.precio_especial || 0),
-            precio_otros: Number(pres.precio_otros || 0),
+            precio_costo: toCentimos(pres.precio_costo),
+            precio_venta: toCentimos(pres.precio_venta),
+            precio_mayor: toCentimos(pres.precio_mayor),
+            precio_especial: toCentimos(pres.precio_especial),
+            precio_otros: toCentimos(pres.precio_otros),
             activo: pres.activo ?? true
           })
           .returning()
-        presInsertadas.push(pRow)
+        presInsertadas.push({
+          ...pRow,
+          precio_costo: Number(pRow.precio_costo || 0) / factorPrecio,
+          precio_venta: Number(pRow.precio_venta || 0) / factorPrecio,
+          precio_mayor: Number(pRow.precio_mayor || 0) / factorPrecio,
+          precio_especial: Number(pRow.precio_especial || 0) / factorPrecio,
+          precio_otros: Number(pRow.precio_otros || 0) / factorPrecio
+        })
       }
 
       return {
@@ -295,11 +332,14 @@ async function productosRoutes(fastify) {
   fastify.put('/:id', async (request, reply) => {
     const { id } = request.params
     const payload = request.body
+    const { factorPrecio } = await getFactores()
 
     const [existente] = await db.select().from(schema.productos).where(eq(schema.productos.id, id))
     if (!existente) {
       throw fastify.httpErrors.notFound('Producto no encontrado')
     }
+
+    const toCentimos = (val) => Math.round(Number(val || 0) * factorPrecio)
 
     const cleanUuid = (val) => {
       if (!val || typeof val !== 'string') return null
@@ -325,15 +365,13 @@ async function productosRoutes(fastify) {
           es_producido: payload.es_producido !== undefined ? payload.es_producido : existente.es_producido,
           es_combo: payload.es_combo !== undefined ? payload.es_combo : existente.es_combo,
           activo: payload.activo !== undefined ? payload.activo : existente.activo,
-          stock_minimo: payload.stock_minimo !== undefined ? Number(payload.stock_minimo) : existente.stock_minimo,
+          stock_minimo: payload.stock_minimo !== undefined ? Math.round(Number(payload.stock_minimo)) : existente.stock_minimo,
           categoria: payload.categoria_id !== undefined ? cleanUuid(payload.categoria_id) : existente.categoria,
           sub_categoria: payload.sub_categoria_id !== undefined ? cleanUuid(payload.sub_categoria_id) : existente.sub_categoria,
-          tipo_existencia: payload.tipo_existencia_id !== undefined ? cleanUuid(payload.tipo_existencia_id) : existente.tipo_existencia,
-          tipo_tributo: payload.tipo_tributo_id !== undefined ? cleanUuid(payload.tipo_tributo_id) : existente.tipo_tributo,
+          tipo_existencia: payload.tipo_existencia_id !== undefined ? (payload.tipo_existencia_id && String(payload.tipo_existencia_id).trim() !== '' ? String(payload.tipo_existencia_id).trim() : null) : existente.tipo_existencia,
+          tipo_tributo: payload.tipo_tributo_id !== undefined ? (payload.tipo_tributo_id && String(payload.tipo_tributo_id).trim() !== '' ? String(payload.tipo_tributo_id).trim() : null) : existente.tipo_tributo,
           updated_at: new Date().toISOString()
         })
-        .where(eq(schema.productos.id, id))
-        .returning()
         .where(eq(schema.productos.id, id))
         .returning()
 
@@ -351,22 +389,37 @@ async function productosRoutes(fastify) {
               nombre: pres.nombre || 'UNIDAD',
               cod_barra: pres.cod_barra || payload.codigo_barra || null,
               multiplica_por: Number(pres.multiplica_por || 1),
-              precio_costo: Number(pres.precio_costo || 0),
-              precio_venta: Number(pres.precio_venta || 0),
-              precio_mayor: Number(pres.precio_mayor || 0),
-              precio_especial: Number(pres.precio_especial || 0),
-              precio_otros: Number(pres.precio_otros || 0),
+              precio_costo: toCentimos(pres.precio_costo),
+              precio_venta: toCentimos(pres.precio_venta),
+              precio_mayor: toCentimos(pres.precio_mayor),
+              precio_especial: toCentimos(pres.precio_especial),
+              precio_otros: toCentimos(pres.precio_otros),
               activo: pres.activo ?? true
             })
             .returning()
-          presActualizadas.push(pRow)
+          presActualizadas.push({
+            ...pRow,
+            precio_costo: Number(pRow.precio_costo || 0) / factorPrecio,
+            precio_venta: Number(pRow.precio_venta || 0) / factorPrecio,
+            precio_mayor: Number(pRow.precio_mayor || 0) / factorPrecio,
+            precio_especial: Number(pRow.precio_especial || 0) / factorPrecio,
+            precio_otros: Number(pRow.precio_otros || 0) / factorPrecio
+          })
         }
       } else {
-        // Si no se envió array, recuperar las existentes
-        presActualizadas = await tx
+        // Si no se envió array, recuperar las existentes convirtiendo a decimal
+        const rawExisting = await tx
           .select()
           .from(schema.presentaciones)
           .where(eq(schema.presentaciones.producto_uuid, id))
+        presActualizadas = rawExisting.map(pres => ({
+          ...pres,
+          precio_costo: Number(pres.precio_costo || 0) / factorPrecio,
+          precio_venta: Number(pres.precio_venta || 0) / factorPrecio,
+          precio_mayor: Number(pres.precio_mayor || 0) / factorPrecio,
+          precio_especial: Number(pres.precio_especial || 0) / factorPrecio,
+          precio_otros: Number(pres.precio_otros || 0) / factorPrecio
+        }))
       }
 
       return {

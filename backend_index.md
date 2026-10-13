@@ -236,7 +236,7 @@ Centraliza todos los catálogos estáticos y tablas fijas del sistema y de SUNAT
 | `GET /api/tipos-tributos` | `tipo_tributos` | Tributos e impuestos fiscales (`IGV`, `ISC`, `IVAP`). |
 | `GET /api/tipos-existencia` | `tipo_existencia` | Tipos de inventario (`Mercadería`, `Materia Prima`, `Envases`, etc.). |
 | `GET /api/tipos-impuesto` | `tipo_impuesto` | Impuestos parametrizados y alícuotas del sistema. |
-| `GET /api/tipos-factores` | `tipo_factores` | Factores de cálculo y recargos comerciales. |
+| `GET /api/tipos-factores` | `tipo_factores` | Factores de conversión globales (`PRECIO`: 100 para trabajar en céntimos; `VOLUMEN`: 1000000 para cantidades). |
 | `GET /api/tipos-stock` | `tipo_stock` | Estados de inventario (`Físico`, `Comprometido`). |
 | `GET /api/tipos-motivo-traslado` | `tipo_motivo_traslado` | Motivos de guías de remisión (`Venta`, `Compra`, `Traslado sede`). |
 | `GET /api/tipos-detraccion` | `tipo_codigos_detraccion` | Bienes y servicios sujetos al SPOT / Detracciones SUNAT. |
@@ -304,11 +304,11 @@ Centraliza todos los catálogos estáticos y tablas fijas del sistema y de SUNAT
 
 | Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/productos` | Bearer JWT | Autenticado | Consulta paginada del catálogo de productos con búsqueda por código o nombre (`page`, `limit`, `q`). |
-| `GET` | `/api/productos/:id` | Bearer JWT | Autenticado | Consulta la ficha individual de un producto. |
-| `POST` | `/api/productos` | Bearer JWT | Autenticado | Crea un nuevo producto validando campos mínimos (`nombre`, `precio`, `codigo`, `stock`, `categoria_id`). |
-| `PUT` | `/api/productos/:id` | Bearer JWT | Autenticado | Actualiza precios, nombre o inventario del producto. |
-| `DELETE` | `/api/productos/:id` | Bearer JWT | Autenticado | Da de baja lógica al producto. |
+| `GET` | `/api/productos` | Bearer JWT | Autenticado | Consulta catálogo de productos con sus presentaciones y precios calculados divididos por `factorPrecio` (decimal visual en Soles), ordenados cronológicamente descendente. Admite filtros por categoría y búsqueda textual. Retorna además el objeto `{ factores: { factorPrecio, factorVolumen } }`. |
+| `GET` | `/api/productos/:id` | Bearer JWT | Autenticado | Consulta la ficha individual de un producto con todas sus presentaciones y tarifas asociadas en formato decimal y `_raw` en enteros. |
+| `POST` | `/api/productos` | Bearer JWT | Autenticado | Registra transaccionalmente un producto y su array de presentaciones. Aplica automáticamente `factorPrecio` para persistir los precios en céntimos (enteros `bigint`) y valida `stock_minimo` como entero. Admite clasificaciones fiscales SUNAT (`tipo_existencia`: `varchar(5)`, ej. `"1"` Mercadería; `tipo_tributo`: `varchar(5)`, ej. `"10"` Gravado IGV), códigos de barra, palabras clave y multiempresa (`empresa_id`). |
+| `PUT` | `/api/productos/:id` | Bearer JWT | Autenticado | Actualiza el producto y sincroniza sus presentaciones comerciales en una transacción atómica multiplicando tarifas por `factorPrecio`. |
+| `DELETE` | `/api/productos/:id` | Bearer JWT | Autenticado | Da de baja lógica al producto (`activo: false`). |
 
 ---
 
