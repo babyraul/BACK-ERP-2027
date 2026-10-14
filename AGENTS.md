@@ -1,0 +1,1 @@
+"No vuelvas a leer el mismo archivo más de una vez en una misma tarea a menos que su contenido haya cambiado explícitamente. Si la solución no es clara tras la primera lectura, detente y consúltame en lugar de re-analizar todo el directorio."

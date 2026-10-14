@@ -299,6 +299,19 @@ Centraliza todos los catálogos estáticos y tablas fijas del sistema y de SUNAT
 
 ---
 
+### 2.12.1 Proveedores (`/api/proveedores`)
+*Archivo: `src/routes/proveedores.routes.js`*
+
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/api/proveedores` | Bearer JWT | `proveedores.ver` | Lista el directorio de proveedores con soporte para filtro de texto `q`, estado `activo`, join a `ubigeo` y aislamiento RLS por empresa. |
+| `GET` | `/api/proveedores/:id` | Bearer JWT | `proveedores.ver` | Obtiene el detalle de un proveedor por su UUID con datos de ubicación territorial. |
+| `POST` | `/api/proveedores` | Bearer JWT | `proveedores.crear` | Registra un nuevo proveedor validando RUC de 11 dígitos, unicidad y asignación automática de empresa (`empresa_id`). |
+| `PUT` | `/api/proveedores/:id` | Bearer JWT | `proveedores.editar` | Actualiza la información fiscal, de contacto y clasificación comercial del proveedor. |
+| `DELETE` | `/api/proveedores/:id` | Bearer JWT | `proveedores.eliminar` | Da de baja lógica al proveedor (`activo: false`). |
+
+---
+
 ### 2.13 Productos (`/api/productos`)
 *Archivo: `src/routes/productos.routes.js`*
 
