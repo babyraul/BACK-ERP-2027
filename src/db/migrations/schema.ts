@@ -614,7 +614,6 @@ export const mensajeticket = pgTable("mensajeticket", {
 export const caja_turnos = pgTable("caja_turnos", {
 	id: uuid("id").defaultRandom().primaryKey().notNull(),
 	usuario_id: uuid("usuario_id").notNull(),
-	caja_serie_correlativo_id: uuid("caja_serie_correlativo_id").notNull(),
 	identificador_caja: varchar("identificador_caja", { length: 10 }).notNull(),
 	branch_id: uuid("branch_id").notNull(),
 	fecha_apertura: timestamp("fecha_apertura", { mode: 'string' }).defaultNow(),

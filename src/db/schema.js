@@ -732,7 +732,6 @@ const mensajeticket = (0, import_pg_core.pgTable)("mensajeticket", {
 const caja_turnos = (0, import_pg_core.pgTable)("caja_turnos", {
   id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
   usuario_id: (0, import_pg_core.uuid)("usuario_id").notNull(),
-  caja_serie_correlativo_id: (0, import_pg_core.uuid)("caja_serie_correlativo_id").notNull(),
   identificador_caja: (0, import_pg_core.varchar)("identificador_caja", { length: 10 }).notNull(),
   branch_id: (0, import_pg_core.uuid)("branch_id").notNull(),
   fecha_apertura: (0, import_pg_core.timestamp)("fecha_apertura", { mode: "string" }).defaultNow(),

@@ -205,16 +205,26 @@ BACK/
 
 ---
 
-### 2.7 Cajas y Series de Facturación (`/api/cajas`)
-*Archivo: `src/routes/cajas.routes.js`* · *Generado vía: `crud.factory.js` sobre `schema.caja_serie_correlativo`*
+### 2.7 Cajas, Turnos y Arqueos (`/api/cajas`)
+*Archivo: `src/routes/cajas.routes.js`* · *Maneja `caja_serie_correlativo`, `caja_turnos` y `caja_totales`*
 
 | Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/cajas` | Bearer JWT | `cajas.ver` | Lista puntos de venta y correlativos configurados para la sucursal activa. |
+| `GET` | `/api/cajas` | Bearer JWT | `cajas.ver` | Lista series, impresoras y puntos de venta de la sucursal activa con join a `tipo_comprobante`. |
 | `GET` | `/api/cajas/:id` | Bearer JWT | `cajas.ver` | Obtiene la configuración de una serie/caja específica. |
 | `POST` | `/api/cajas` | Bearer JWT | `cajas.crear` | Da de alta una nueva serie para boleta, factura o ticket vinculada a un tipo de comprobante. |
-| `PUT` | `/api/cajas/:id` | Bearer JWT | `cajas.editar` | Actualiza correlativo actual, nombre o estado de la caja. |
+| `PUT` | `/api/cajas/:id` | Bearer JWT | `cajas.editar` | Actualiza correlativo actual, nombre o estado de la serie. |
 | `DELETE` | `/api/cajas/:id` | Bearer JWT | `cajas.eliminar` | Desactiva o elimina la serie de facturación. |
+| `GET` | `/api/cajas/configuradas` | Bearer JWT | `cajas.ver` | Lista consolidada de cajas físicas (`identificador_caja`) para la apertura de turnos, indicando sus series autorizadas, tipo de caja y disponibilidad (si está libre u ocupada por otro cajero). |
+| `GET` | `/api/cajas/turnos` | Bearer JWT | `cajas.ver` | Historial de turnos con filtros query (`estado`, `fecha`, `usuario_id`, `identificador_caja`) con join a usuario y totales declarados/apertura. |
+| `GET` | `/api/cajas/turnos/activo` | Bearer JWT | `cajas.ver` | Retorna el turno actual en estado `ABIERTA` para el usuario y sucursal actual, junto con desglose de totales. |
+| `GET` | `/api/cajas/turnos/:id` | Bearer JWT | `cajas.ver` | Detalle completo de un turno: metadatos, tabla de `caja_totales` y lista de ventas emitidas asociadas al turno. |
+| `POST` | `/api/cajas/turnos/apertura` | Bearer JWT | `cajas.crear` | **Apertura de Caja Transaccional:** Valida existencia de la caja en `caja_serie_correlativo`, previene turnos concurrentes en la misma caja física, inserta en `caja_turnos` e inicializa registros en `caja_totales` para todos los métodos de pago. |
+| `GET` | `/api/cajas/turnos/:id/movimientos` | Bearer JWT | `cajas.ver` | Consulta el historial de movimientos manuales (ingresos/egresos) registrados en la gaveta del turno. |
+| `POST` | `/api/cajas/turnos/:id/movimientos` | Bearer JWT | `cajas.editar` | Registra transaccionalmente una entrada o salida de dinero en `caja_movimientos` asociada al turno. |
+| `GET` | `/api/cajas/turnos/:id/arqueos` | Bearer JWT | `cajas.ver` | Consulta el desglose de conteo físico de monedas y billetes por denominación (`caja_arqueos`). |
+| `POST` | `/api/cajas/turnos/:id/arqueos` | Bearer JWT | `cajas.editar` | Guarda el detalle de denominaciones y cantidades del conteo físico del cajero (`caja_arqueos`). |
+| `POST` | `/api/cajas/turnos/:id/cierre` | Bearer JWT | `cajas.editar` | **Arqueo y Cierre Transaccional:** Agrupa las ventas del turno y movimientos manuales, calcula montos del sistema vs montos declarados, calcula y registra diferencias en `caja_totales` (`diferencia = declarado - sistema`) y cambia el estado a `CERRADA`. |
 
 ---
 
