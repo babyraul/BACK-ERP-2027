@@ -259,6 +259,11 @@ const tipo_existencia = (0, import_pg_core.pgTable)("tipo_existencia", {
 const tipo_metodo_pago = (0, import_pg_core.pgTable)("tipo_metodo_pago", {
   id: (0, import_pg_core.varchar)("id", { length: 5 }).primaryKey().notNull(),
   nombre: (0, import_pg_core.varchar)("nombre", { length: 50 }).notNull(),
+  codigo: (0, import_pg_core.varchar)("codigo", { length: 50 }),
+  imagen_url: (0, import_pg_core.text)("imagen_url"),
+  color: (0, import_pg_core.varchar)("color", { length: 30 }).default("teal").notNull(),
+  orden: (0, import_pg_core.integer)("orden").default(0).notNull(),
+  activo: (0, import_pg_core.boolean)("activo").default(true).notNull(),
   updated_at: (0, import_pg_core.timestamp)("updated_at", { mode: "string" }).defaultNow()
 });
 const tipo_impuesto = (0, import_pg_core.pgTable)("tipo_impuesto", {

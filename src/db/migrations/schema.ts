@@ -148,6 +148,11 @@ export const tipo_existencia = pgTable("tipo_existencia", {
 export const tipo_metodo_pago = pgTable("tipo_metodo_pago", {
 	id: varchar("id", { length: 5 }).primaryKey().notNull(),
 	nombre: varchar("nombre", { length: 50 }).notNull(),
+	codigo: varchar("codigo", { length: 50 }),
+	imagen_url: text("imagen_url"),
+	color: varchar("color", { length: 30 }).default("teal").notNull(),
+	orden: integer("orden").default(0).notNull(),
+	activo: boolean("activo").default(true).notNull(),
 	updated_at: timestamp("updated_at", { mode: 'string' }).defaultNow(),
 });
 
