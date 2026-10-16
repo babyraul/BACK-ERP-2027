@@ -105,7 +105,10 @@ BACK/
     │   ├── tiposComprobante.routes.js# Catálogo de tipos de comprobantes SUNAT
     │   ├── usuarios.routes.js        # Gestión de usuarios, jerarquía de roles y accesos multi-tenant
     │   ├── utils.routes.js           # Servicios de consulta a APIs externas (RUC / DNI)
-    │   └── ventas.routes.js          # Endpoints para registro y anulación de ventas
+    │   └── ventas.routes.js          # Endpoints para registro y facturación de ventas
+    │
+    ├── utils/                   # Utilidades globales del servidor
+    │   └── factores.js               # Extracción y conversión de factores del sistema (PRECIO x100, VOLUMEN x1000000)
     │
     └── services/                # Capa de servicios con reglas de negocio desacopladas
         ├── api_peru_service.js       # Consumo de API externa de RUC/DNI con fallback resiliente
@@ -335,15 +338,27 @@ Centraliza todos los catálogos estáticos y tablas fijas del sistema y de SUNAT
 
 ---
 
-### 2.14 Ventas (`/api/ventas`)
-*Archivo: `src/routes/ventas.routes.js`*
+### 2.13.1 Pre-Ventas (`/api/preventas`)
+*Archivo: `src/routes/preventas.routes.js`* · *Maneja `pre_ventas` y `detalle_pre_ventas`*
 
 | Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/ventas` | Bearer JWT | Autenticado | Lista comprobantes de venta con filtros por rango de fechas (`desde`, `hasta`), estado y paginación. |
-| `GET` | `/api/ventas/:id` | Bearer JWT | Autenticado | Obtiene la cabecera de la venta junto a su detalle de ítems. |
-| `POST` | `/api/ventas` | Bearer JWT | Autenticado | Registra una transacción de venta (boleta, factura, ticket) con array de ítems (`producto_id`, `cantidad`, `precio_unitario`, `descuento`). |
-| `PATCH` | `/api/ventas/:id/anular` | Bearer JWT | Autenticado | Anula una venta emitida y genera el registro en la cola de sincronización. |
+| `GET` | `/api/preventas` | Bearer JWT | Autenticado | Lista preventas con filtros query (`fecha_inicio`, `fecha_fin`, `estado`, `q`), join a `clientes` y RLS por `branch_id`. |
+| `GET` | `/api/preventas/:id` | Bearer JWT | Autenticado | Obtiene la cabecera de la preventa junto a su array de ítems (`detalle_pre_ventas`). |
+| `POST` | `/api/preventas` | Bearer JWT | Autenticado | **Generación Transaccional de Preventa:** Inserta cabecera en `pre_ventas` (estado `PENDIENTE`, vinculada al turno activo si existe) y líneas en `detalle_pre_ventas`. Retorna `id` y código legible (`PRE-xxxxxxxx`). |
+| `PUT` | `/api/preventas/:id` | Bearer JWT | Autenticado | **Edición de Preventa:** Actualiza cliente, placa y totales en `pre_ventas` y reemplaza atómicamente los ítems en `detalle_pre_ventas`. Bloquea si la preventa ya fue PROCESADA. |
+
+---
+
+### 2.14 Ventas y Facturación (`/api/ventas`)
+*Archivo: `src/routes/ventas.routes.js`* · *Maneja `ventas`, `detalle_ventas`, `ventas_pagos` y `stock_actual`*
+
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/api/ventas` | Bearer JWT | Autenticado | Lista comprobantes de venta emitidos con filtros (`fecha_inicio`, `fecha_fin`, `estado`, `tipo_documento`, `q`), serie-correlativo y RLS por `branch_id`. |
+| `GET` | `/api/ventas/:id` | Bearer JWT | Autenticado | Obtiene cabecera de venta, detalle de ítems (`detalle_ventas`) y métodos de pago aplicados (`ventas_pagos`). |
+| `POST` | `/api/ventas` | Bearer JWT | Autenticado | **Transacción de Venta y Cobro:** Asigna atómicamente serie y correlativo desde `caja_serie_correlativo`, inserta en `ventas`, copia ítems a `detalle_ventas`, registra métodos en `ventas_pagos`, descuenta inventario en `stock_actual` y actualiza la preventa a `PROCESADA`. Si es `factura` o `boleta`, activa la facturación electrónica (`facturado = true`). Si es `vale`, emite comprobante interno sin envío tributario. |
+| `POST` | `/api/ventas/:id/anular` | Bearer JWT | Autenticado | Anula una venta emitida (`estado = 'ANULADO'`) registrando el motivo. |
 
 ---
 

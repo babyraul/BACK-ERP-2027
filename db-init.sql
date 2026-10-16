@@ -907,7 +907,6 @@ CREATE TABLE IF NOT EXISTS "ventas" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     "branch_id" uuid NOT NULL,
     "preventa_id" uuid UNIQUE,
-    "caja_id" uuid,
     "caja_turno_id" uuid,
     "usuario_id" uuid,
     "cliente_id" uuid,

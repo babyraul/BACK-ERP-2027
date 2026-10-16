@@ -2223,3 +2223,5 @@ VALUES
 ('010102', 'AMAZONAS', 'CHACHAPOYAS', 'ASUNCION'),
 ('010101', 'AMAZONAS', 'CHACHAPOYAS', 'CHACHAPOYAS')
 ON CONFLICT DO NOTHING;
+
+INSERT INTO clientes (id, tipo_documento_id, numero_documento, nombre_razon_social, direccion_1, direccion_2, direccion_3, email_1, email_2, email_3, telefono_1, telefono_2, telefono_3, empresa_id, sincronizado, created_at, updated_at, limite_credito_int, saldo_utilizado_int, dias_credito_pactado, cantidad_cuotas, estado_credito) VALUES ('00000000-0000-0000-0000-000000000000', 1, '99999999', 'VARIOS', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '0cc3616b-a426-4afa-b3d1-14078abb1fad', FALSE, '2026-10-16 15:42:13.725', '2026-10-16 15:42:13.725', 0, 0, 30, 1, 'NORMAL');

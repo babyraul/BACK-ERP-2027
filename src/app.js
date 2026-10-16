@@ -19,6 +19,7 @@ const gestionRoutes   = require('./routes/gestion.routes')
 const utilsRoutes     = require('./routes/utils.routes')
 const tablasFijasRoutes = require('./routes/tablasFijas.routes')
 const proveedoresRoutes = require('./routes/proveedores.routes')
+const preventasRoutes   = require('./routes/preventas.routes')
 
 async function buildApp(opts = {}) {
   const app = Fastify({
@@ -41,6 +42,7 @@ async function buildApp(opts = {}) {
   await app.register(authRoutes,      { prefix: '/api/auth' })
   await app.register(productosRoutes, { prefix: '/api/productos' })
   await app.register(clientesRoutes,  { prefix: '/api/clientes' })
+  await app.register(preventasRoutes, { prefix: '/api/preventas' })
   await app.register(ventasRoutes,    { prefix: '/api/ventas' })
   await app.register(usuariosRoutes,  { prefix: '/api/usuarios' })
   await app.register(syncRoutes,      { prefix: '/api/sync' })

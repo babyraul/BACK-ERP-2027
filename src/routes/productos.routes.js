@@ -3,6 +3,7 @@
 const { db } = require('../db')
 const schema = require('../db/schema')
 const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
+const { getFactores, toPrecioInt, toPrecioVisual } = require('../utils/factores')
 
 /**
  * Rutas CRUD de Productos con Drizzle ORM
@@ -14,18 +15,6 @@ const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
 async function productosRoutes(fastify) {
   // Verificación de autenticación y autorización RBAC automática (productos.ver, etc.)
   fastify.addHook('preHandler', fastify.authorize)
-
-  // Obtener factores de conversión del sistema (default PRECIO: 100, VOLUMEN: 1000000)
-  const getFactores = async () => {
-    try {
-      const factoresRows = await db.select().from(schema.tipo_factores)
-      const fPrecio = factoresRows.find(f => f.codigo === 'PRECIO')?.valor || 100
-      const fVolumen = factoresRows.find(f => f.codigo === 'VOLUMEN')?.valor || 1000000
-      return { factorPrecio: Number(fPrecio), factorVolumen: Number(fVolumen) }
-    } catch (e) {
-      return { factorPrecio: 100, factorVolumen: 1000000 }
-    }
-  }
 
   // ── GET /api/productos ──────────────────────────────────────────────────────────
   fastify.get('/', async (request, reply) => {
