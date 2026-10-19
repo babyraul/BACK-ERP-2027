@@ -63,12 +63,14 @@ async function ventasRoutes(fastify) {
           serie: schema.ventas.serie,
           correlativo: schema.ventas.correlativo,
           branch_id: schema.ventas.branch_id,
+          sucursal_nombre: sql`COALESCE(${schema.sucursales.sucursal_nombre}, ${schema.sucursales.razon_social}, 'Principal')`,
           preventa_id: schema.ventas.preventa_id,
           caja_turno_id: schema.ventas.caja_turno_id,
           usuario_id: schema.ventas.usuario_id,
           cliente_id: schema.ventas.cliente_id,
           cliente_nombre: schema.clientes.nombre_razon_social,
           cliente_numero_documento: schema.clientes.numero_documento,
+          cliente_tipo_documento_id: schema.clientes.tipo_documento_id,
           tipo_comprobante_id: schema.ventas.tipo_comprobante_id,
           tipo_documento: sql`CASE 
             WHEN ${schema.ventas.tipo_comprobante_id} = '01' THEN 'factura'
@@ -78,19 +80,39 @@ async function ventasRoutes(fastify) {
           placa: schema.ventas.alias,
           moneda: schema.ventas.moneda,
           fecha_emision: schema.ventas.fecha_emision,
-          gravadas: sql`ROUND(CAST(${schema.ventas.gravadas} AS numeric) / ${factorPrecio}, 2)`,
-          igv: sql`ROUND(CAST(${schema.ventas.igv} AS numeric) / ${factorPrecio}, 2)`,
-          total: sql`ROUND(CAST(${schema.ventas.total_venta} AS numeric) / ${factorPrecio}, 2)`,
-          total_venta: sql`ROUND(CAST(${schema.ventas.total_venta} AS numeric) / ${factorPrecio}, 2)`,
+          gravadas: sql`ROUND(CAST(COALESCE(${schema.ventas.gravadas}, 0) AS numeric) / ${factorPrecio}, 2)`,
+          exoneradas: sql`ROUND(CAST(COALESCE(${schema.ventas.exoneradas}, 0) AS numeric) / ${factorPrecio}, 2)`,
+          inafectas: sql`ROUND(CAST(COALESCE(${schema.ventas.inafectas}, 0) AS numeric) / ${factorPrecio}, 2)`,
+          igv: sql`ROUND(CAST(COALESCE(${schema.ventas.igv}, 0) AS numeric) / ${factorPrecio}, 2)`,
+          descuento: sql`ROUND(CAST(COALESCE(${schema.ventas.descuento}, 0) AS numeric) / ${factorPrecio}, 2)`,
+          total: sql`ROUND(CAST(COALESCE(${schema.ventas.total_venta}, 0) AS numeric) / ${factorPrecio}, 2)`,
+          total_venta: sql`ROUND(CAST(COALESCE(${schema.ventas.total_venta}, 0) AS numeric) / ${factorPrecio}, 2)`,
+          total_redondeo: sql`ROUND(CAST(COALESCE(${schema.ventas.total_venta}, 0) AS numeric) / ${factorPrecio}, 2)`,
+          redondeo: sql`0.00`,
           estado: schema.ventas.estado,
+          estado_pago: schema.ventas.estado_pago,
+          tipo_pago_id: schema.ventas.tipo_pago_id,
+          modalidad_pago: sql`CASE WHEN ${schema.ventas.tipo_pago_id} = '2' THEN 'Crédito' ELSE 'Contado' END`,
           facturado: schema.ventas.facturado,
           xml_url: schema.ventas.xml_url,
           cdr_url: schema.ventas.cdr_url,
           pdf_url: schema.ventas.pdf_url,
-          created_at: schema.ventas.created_at
+          created_at: schema.ventas.created_at,
+          tipos_pago: sql`(
+            SELECT STRING_AGG(COALESCE(tmp.nombre, 'Efectivo'), ', ')
+            FROM ${schema.ventas_pagos} vp
+            LEFT JOIN ${schema.tipo_metodo_pago} tmp ON vp.metodo_pago_id = tmp.id
+            WHERE vp.venta_id = ${schema.ventas.id}
+          )`,
+          montos_pago: sql`(
+            SELECT STRING_AGG(TO_CHAR(ROUND(CAST(vp.monto AS numeric) / ${factorPrecio}, 2), 'FM999999990.00'), ', ')
+            FROM ${schema.ventas_pagos} vp
+            WHERE vp.venta_id = ${schema.ventas.id}
+          )`
         })
         .from(schema.ventas)
         .leftJoin(schema.clientes, eq(schema.ventas.cliente_id, schema.clientes.id))
+        .leftJoin(schema.sucursales, eq(schema.ventas.branch_id, schema.sucursales.id))
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(schema.ventas.fecha_emision))
 
@@ -215,12 +237,68 @@ async function ventasRoutes(fastify) {
         return reply.code(400).send({ success: false, message: 'El usuario no tiene una sucursal activa' })
       }
 
-      // Obtener turno activo
+      // Validar monto >= 700 para clientes anónimos (Regla Fiscal SUNAT RN-V03)
+      const isUUID = (str) =>
+        Boolean(str && typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str))
+
+      let clienteDoc = null
+      if (cliente_id && isUUID(cliente_id)) {
+        const [cli] = await db
+          .select({ numero_documento: schema.clientes.numero_documento })
+          .from(schema.clientes)
+          .where(eq(schema.clientes.id, cliente_id))
+          .limit(1)
+        clienteDoc = cli?.numero_documento
+      }
+
+      const esClienteGenerico = !clienteDoc || clienteDoc === '99999999' || clienteDoc === '00000000'
+      const totalNum = Number(total || 0)
+      if (totalNum >= 700 && esClienteGenerico && tipo_documento !== 'vale') {
+        return reply.code(422).send({
+          success: false,
+          message: 'Para montos mayores o iguales a S/. 700.00 SUNAT exige identificar al cliente con DNI o RUC.'
+        })
+      }
+
+      // Obtener turno activo del usuario en la sucursal (RN-V01 y RN-V02)
       const [turnoActivo] = await db
-        .select({ id: schema.caja_turnos.id, identificador_caja: schema.caja_turnos.identificador_caja })
+        .select({
+          id: schema.caja_turnos.id,
+          identificador_caja: schema.caja_turnos.identificador_caja,
+          fecha_apertura: schema.caja_turnos.fecha_apertura
+        })
         .from(schema.caja_turnos)
-        .where(and(eq(schema.caja_turnos.branch_id, branchId), eq(schema.caja_turnos.estado, 'ABIERTA')))
+        .where(
+          and(
+            eq(schema.caja_turnos.branch_id, branchId),
+            eq(schema.caja_turnos.usuario_id, usuarioId),
+            eq(schema.caja_turnos.estado, 'ABIERTA')
+          )
+        )
         .limit(1)
+
+      if (!turnoActivo) {
+        return reply.code(400).send({
+          success: false,
+          message: 'No tiene un turno de caja abierto para registrar ventas. Por favor aperture un turno en el módulo Caja.'
+        })
+      }
+
+      // Validación RN-V02: Cierre vencido a las 03:30 AM del día siguiente
+      if (turnoActivo.fecha_apertura) {
+        const fechaApertura = new Date(turnoActivo.fecha_apertura)
+        const ahora = new Date()
+        const limiteVencimiento = new Date(fechaApertura)
+        limiteVencimiento.setDate(limiteVencimiento.getDate() + 1)
+        limiteVencimiento.setHours(3, 30, 0, 0)
+
+        if (ahora > limiteVencimiento) {
+          return reply.code(400).send({
+            success: false,
+            message: 'El turno de caja activo está vencido (límite superado: 03:30 AM del día siguiente). Debe realizar el arqueo y cierre de caja antes de continuar vendiendo.'
+          })
+        }
+      }
 
       const tipoDocNormalized = String(tipo_documento || 'boleta').toLowerCase()
       const tipoComprobanteId =
