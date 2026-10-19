@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS "clientes" (
     "telefono_1" character varying(20),
     "telefono_2" character varying(20),
     "telefono_3" character varying(20),
-    "branch_id" uuid,
+    "empresa_id" uuid,
     "sincronizado" boolean DEFAULT false,
     "created_at" timestamp DEFAULT CURRENT_TIMESTAMP,
     "updated_at" timestamp DEFAULT CURRENT_TIMESTAMP,
@@ -127,6 +127,11 @@ CREATE TABLE IF NOT EXISTS "tipo_impuesto" (
 CREATE TABLE IF NOT EXISTS "tipo_metodo_pago" (
     "id" character varying(5) PRIMARY KEY NOT NULL,
     "nombre" character varying(50) NOT NULL,
+    "codigo" character varying(50),
+    "imagen_url" text,
+    "color" character varying(30) NOT NULL DEFAULT 'teal',
+    "orden" integer NOT NULL DEFAULT 0,
+    "activo" boolean NOT NULL DEFAULT true,
     "updated_at" timestamp DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -277,6 +282,7 @@ CREATE TABLE IF NOT EXISTS "modulos" (
     "ruta" varchar(255),
     "tipo" varchar(50) NOT NULL DEFAULT 'MODULO',
     "orden" integer NOT NULL DEFAULT 0,
+    "icon" varchar(50),
     "activo" boolean DEFAULT true,
     "created_at" timestamp NOT NULL DEFAULT now(),
     "updated_at" timestamp NOT NULL DEFAULT now()
@@ -350,7 +356,7 @@ CREATE TABLE IF NOT EXISTS "almacenes" (
 
 CREATE TABLE IF NOT EXISTS "productos" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    "branch_id" uuid,
+    "empresa_id" uuid,
     "nombre" varchar(150) NOT NULL,
     "descripcion" text,
     "palabra_clave" varchar(255),
@@ -366,11 +372,12 @@ CREATE TABLE IF NOT EXISTS "productos" (
     "created_at" timestamptz DEFAULT CURRENT_TIMESTAMP,
     "updated_at" timestamptz DEFAULT CURRENT_TIMESTAMP,
     "codigo_sunat" varchar(50),
+    "codigo" varchar(8),
     "stock_minimo" int DEFAULT 0,
     "categoria" uuid,
     "sub_categoria" uuid,
-    "tipo_existencia" uuid,
-    "tipo_tributo" uuid
+    "tipo_existencia" varchar(5),
+    "tipo_tributo" varchar(5)
 );
 
 CREATE TABLE IF NOT EXISTS "presentaciones" (
@@ -430,7 +437,7 @@ CREATE TABLE IF NOT EXISTS "stock_actual" (
 
 CREATE TABLE IF NOT EXISTS "proveedores" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    "branch_id" uuid,
+    "empresa_id" uuid,
     "ruc" varchar(11) NOT NULL UNIQUE,
     "razon_social" varchar(200) NOT NULL,
     "nombre_comercial" varchar(200),
@@ -460,7 +467,7 @@ CREATE TABLE IF NOT EXISTS "productos_proveedores" (
 
 CREATE TABLE IF NOT EXISTS "categorias" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    "branch_id" uuid,
+    "empresa_id" uuid,
     "nombre" varchar(50) NOT NULL,
     "activo" boolean NOT NULL DEFAULT true,
     "sincronizado" boolean DEFAULT true,
@@ -487,7 +494,6 @@ CREATE TABLE IF NOT EXISTS "mensajeticket" (
 CREATE TABLE IF NOT EXISTS "caja_turnos" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     "usuario_id" uuid NOT NULL,
-    "caja_serie_correlativo_id" uuid NOT NULL,
     "identificador_caja" varchar(10) NOT NULL,
     "branch_id" uuid NOT NULL,
     "fecha_apertura" timestamp DEFAULT CURRENT_TIMESTAMP,
@@ -865,7 +871,6 @@ CREATE TABLE IF NOT EXISTS "pre_ventas" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     "branch_id" uuid NOT NULL,
     "estado" varchar(20),
-    "caja_id" uuid,
     "caja_turno_id" uuid,
     "usuario_id" uuid,
     "cliente_id" uuid,

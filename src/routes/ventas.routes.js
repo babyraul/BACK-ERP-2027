@@ -199,6 +199,7 @@ async function ventasRoutes(fastify) {
         tipo_documento, // 'factura', 'boleta', 'vale'
         cliente_id,
         placa,
+        alias,
         observaciones,
         orden_compra,
         guia_remision,
@@ -291,7 +292,7 @@ async function ventasRoutes(fastify) {
             caja_turno_id: turnoActivo?.id || null,
             usuario_id: usuarioId,
             cliente_id: isUUID(cliente_id) ? cliente_id : null,
-            alias: placa || null,
+            alias: alias || placa || null,
             tipo_comprobante_id: tipoComprobanteId,
             serie: serieAsignada,
             correlativo: correlativoAsignado,

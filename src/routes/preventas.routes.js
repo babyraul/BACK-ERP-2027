@@ -25,8 +25,10 @@ async function preventasRoutes(fastify) {
         conditions.push(eq(schema.pre_ventas.branch_id, branchId))
       }
 
-      if (estado) {
-        conditions.push(eq(schema.pre_ventas.estado, estado))
+      // Por requerimiento: listar preventas en estado PENDIENTE por defecto
+      const estadoFiltro = estado !== undefined ? (estado || undefined) : 'PENDIENTE'
+      if (estadoFiltro) {
+        conditions.push(eq(schema.pre_ventas.estado, estadoFiltro))
       }
 
       if (fecha_inicio) {
@@ -43,6 +45,8 @@ async function preventasRoutes(fastify) {
           or(
             ilike(schema.clientes.nombre_razon_social, queryTerm),
             ilike(schema.clientes.numero_documento, queryTerm),
+            ilike(schema.pre_ventas.alias, queryTerm),
+            ilike(schema.usuarios.nombre, queryTerm),
             sql`CAST(${schema.pre_ventas.id} AS text) ILIKE ${queryTerm}`
           )
         )
@@ -53,10 +57,12 @@ async function preventasRoutes(fastify) {
       const preventas = await db
         .select({
           id: schema.pre_ventas.id,
-          codigo: sql`CONCAT('PRE-', SUBSTRING(CAST(${schema.pre_ventas.id} AS text), 1, 8))`,
+          codigo: sql`CONCAT('PV-', SUBSTRING(CAST(${schema.pre_ventas.id} AS text), 1, 4))`,
           branch_id: schema.pre_ventas.branch_id,
           caja_turno_id: schema.pre_ventas.caja_turno_id,
           usuario_id: schema.pre_ventas.usuario_id,
+          usuario_nombre: schema.usuarios.nombre,
+          usuario: schema.usuarios.usuario,
           cliente_id: schema.pre_ventas.cliente_id,
           cliente_nombre: schema.clientes.nombre_razon_social,
           cliente_numero_documento: schema.clientes.numero_documento,
@@ -67,6 +73,8 @@ async function preventasRoutes(fastify) {
             WHEN ${schema.pre_ventas.tipo_comprobante_id} = '03' THEN 'boleta'
             ELSE 'vale'
           END`,
+          alias: schema.pre_ventas.alias,
+          placa: schema.pre_ventas.alias,
           moneda: schema.pre_ventas.moneda,
           fecha_emision: schema.pre_ventas.fecha_emision,
           gravadas: sql`ROUND(CAST(${schema.pre_ventas.gravadas} AS numeric) / ${factorPrecio}, 2)`,
@@ -79,6 +87,7 @@ async function preventasRoutes(fastify) {
         })
         .from(schema.pre_ventas)
         .leftJoin(schema.clientes, eq(schema.pre_ventas.cliente_id, schema.clientes.id))
+        .leftJoin(schema.usuarios, eq(schema.pre_ventas.usuario_id, schema.usuarios.id))
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(schema.pre_ventas.created_at))
 
@@ -98,10 +107,12 @@ async function preventasRoutes(fastify) {
       const [preventa] = await db
         .select({
           id: schema.pre_ventas.id,
-          codigo: sql`CONCAT('PRE-', SUBSTRING(CAST(${schema.pre_ventas.id} AS text), 1, 8))`,
+          codigo: sql`CONCAT('PV-', SUBSTRING(CAST(${schema.pre_ventas.id} AS text), 1, 4))`,
           branch_id: schema.pre_ventas.branch_id,
           caja_turno_id: schema.pre_ventas.caja_turno_id,
           usuario_id: schema.pre_ventas.usuario_id,
+          usuario_nombre: schema.usuarios.nombre,
+          usuario: schema.usuarios.usuario,
           cliente_id: schema.pre_ventas.cliente_id,
           cliente_nombre: schema.clientes.nombre_razon_social,
           cliente_numero_documento: schema.clientes.numero_documento,
@@ -112,6 +123,8 @@ async function preventasRoutes(fastify) {
             WHEN ${schema.pre_ventas.tipo_comprobante_id} = '03' THEN 'boleta'
             ELSE 'vale'
           END`,
+          alias: schema.pre_ventas.alias,
+          placa: schema.pre_ventas.alias,
           moneda: schema.pre_ventas.moneda,
           fecha_emision: schema.pre_ventas.fecha_emision,
           gravadas: sql`ROUND(CAST(${schema.pre_ventas.gravadas} AS numeric) / ${factorPrecio}, 2)`,
@@ -122,6 +135,7 @@ async function preventasRoutes(fastify) {
         })
         .from(schema.pre_ventas)
         .leftJoin(schema.clientes, eq(schema.pre_ventas.cliente_id, schema.clientes.id))
+        .leftJoin(schema.usuarios, eq(schema.pre_ventas.usuario_id, schema.usuarios.id))
         .where(eq(schema.pre_ventas.id, id))
 
       if (!preventa) {
@@ -169,6 +183,7 @@ async function preventasRoutes(fastify) {
         cliente_id,
         tipo_documento, // 'factura', 'boleta', 'vale'
         placa,
+        alias,
         items = [],
         gravado = 0,
         igv = 0,
@@ -221,7 +236,7 @@ async function preventasRoutes(fastify) {
             usuario_id: usuarioId,
             cliente_id: isUUID(cliente_id) ? cliente_id : null,
             tipo_comprobante_id: tipoComprobanteId,
-            alias: placa || null,
+            alias: alias || placa || null,
             moneda: 'PEN',
             tipo_cambio: 1,
             gravadas: gravadasInt,
@@ -344,12 +359,13 @@ async function preventasRoutes(fastify) {
 
       await db.transaction(async (tx) => {
         // A. Actualizar cabecera
+        const aliasFinal = alias !== undefined ? alias : (placa !== undefined ? placa : existente.alias)
         await tx
           .update(schema.pre_ventas)
           .set({
             cliente_id: isUUID(cliente_id) ? cliente_id : existente.cliente_id,
             tipo_comprobante_id: tipoComprobanteId,
-            alias: placa !== undefined ? placa : existente.alias,
+            alias: aliasFinal,
             gravadas: gravadasInt,
             igv: igvInt,
             total_venta: totalVentaInt,
