@@ -322,11 +322,12 @@ async function preventasRoutes(fastify) {
         cliente_id,
         tipo_documento,
         placa,
+        alias,
         items = [],
         gravado = 0,
         igv = 0,
         total = 0
-      } = request.body
+      } = request.body || {}
 
       const [existente] = await db
         .select()
@@ -342,7 +343,7 @@ async function preventasRoutes(fastify) {
       }
 
       const tipoComprobanteId =
-        tipo_documento === 'factura' ? '01' : tipo_documento === 'boleta' ? '03' : '00'
+        tipo_documento === 'factura' ? '01' : tipo_documento === 'boleta' ? '03' : (existente.tipo_comprobante_id || '03')
 
       const isUUID = (str) =>
         Boolean(str && typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str))
@@ -363,13 +364,13 @@ async function preventasRoutes(fastify) {
         await tx
           .update(schema.pre_ventas)
           .set({
-            cliente_id: isUUID(cliente_id) ? cliente_id : existente.cliente_id,
+            cliente_id: isUUID(cliente_id) ? cliente_id : (existente.cliente_id || null),
             tipo_comprobante_id: tipoComprobanteId,
             alias: aliasFinal,
             gravadas: gravadasInt,
             igv: igvInt,
             total_venta: totalVentaInt,
-            updated_at: new Date().toISOString()
+            updated_at: sql`NOW()`
           })
           .where(eq(schema.pre_ventas.id, id))
 
@@ -378,12 +379,18 @@ async function preventasRoutes(fastify) {
           await tx.delete(schema.detalle_pre_ventas).where(eq(schema.detalle_pre_ventas.preventa_id, id))
 
           for (const item of items) {
-            let presId = item.presentacion_id
-            if (!presId && item.producto_id) {
+            const prodId = item.producto_id || item.id
+            if (!prodId || !isUUID(prodId)) {
+              request.log.warn({ item }, '[PUT /preventas/:id] Saltando ítem sin producto_id válido')
+              continue
+            }
+
+            let presId = isUUID(item.presentacion_id) ? item.presentacion_id : null
+            if (!presId) {
               const [pres] = await tx
                 .select({ id: schema.presentaciones.id })
                 .from(schema.presentaciones)
-                .where(eq(schema.presentaciones.producto_uuid, item.producto_id))
+                .where(eq(schema.presentaciones.producto_uuid, prodId))
                 .limit(1)
               presId = pres?.id || null
             }
@@ -392,15 +399,15 @@ async function preventasRoutes(fastify) {
               const [nuevaPres] = await tx
                 .insert(schema.presentaciones)
                 .values({
-                  producto_uuid: item.producto_id,
-                  nombre: item.nombre_completo || 'UNIDAD',
-                  precio_venta: Math.round(Number(item.precio_unitario || 0) * factorPrecio)
+                  producto_uuid: prodId,
+                  nombre: item.nombre_completo || item.producto_nombre || 'UNIDAD',
+                  precio_venta: Math.round(Number(item.precio_unitario || item.precio || 0) * factorPrecio)
                 })
                 .returning()
               presId = nuevaPres.id
             }
 
-            const cant = Math.round(Number(item.cantidad || 1))
+            const cant = Math.max(1, Math.round(Number(item.cantidad || 1)))
             const precioVisual = Number(item.precio_unitario || item.precio || 0)
             const precioInt = Math.round(precioVisual * factorPrecio)
             const itemTotalVisual = Number((cant * precioVisual).toFixed(2))
@@ -413,7 +420,7 @@ async function preventasRoutes(fastify) {
 
             await tx.insert(schema.detalle_pre_ventas).values({
               preventa_id: id,
-              producto_id: item.producto_id,
+              producto_id: prodId,
               presentacion_id: presId,
               cantidad: cant,
               precio_unitario: precioInt,
@@ -432,7 +439,75 @@ async function preventasRoutes(fastify) {
       })
     } catch (error) {
       request.log.error(error)
-      return reply.code(500).send({ success: false, message: 'Error al actualizar pre-venta: ' + error.message })
+      return reply.code(500).send({
+        success: false,
+        message: 'Error al actualizar pre-venta: ' + (error.message || 'Error interno del servidor')
+      })
+    }
+  })
+
+  // 5. DELETE /api/preventas/:id - Anulación lógica de preventa
+  fastify.delete('/:id', auth, async (request, reply) => {
+    try {
+      const { id } = request.params
+      const branchId = request.user?.branch_id
+
+      // 1. Obtener la preventa para verificar su existencia y estado
+      const conditions = [eq(schema.pre_ventas.id, id)]
+      if (!request.user?.es_super_admin && branchId) {
+        conditions.push(eq(schema.pre_ventas.branch_id, branchId))
+      }
+
+      const [preventa] = await db
+        .select()
+        .from(schema.pre_ventas)
+        .where(and(...conditions))
+        .limit(1)
+
+      if (!preventa) {
+        return reply.code(404).send({
+          success: false,
+          message: 'La pre-venta no existe o no pertenece a su sucursal activa'
+        })
+      }
+
+      const estadoActual = String(preventa.estado || '').toUpperCase()
+
+      // RN-07: No se puede eliminar una preventa PROCESADA o CANCELADA / ANULADA
+      if (estadoActual === 'PROCESADA') {
+        return reply.code(400).send({
+          success: false,
+          message: 'No se puede anular una pre-venta que ya ha sido procesada/cobrada'
+        })
+      }
+
+      if (estadoActual === 'ANULADO' || estadoActual === 'CANCELADA') {
+        return reply.code(400).send({
+          success: false,
+          message: 'La pre-venta ya se encuentra anulada'
+        })
+      }
+
+      // Borrado lógico (cambio de estado a ANULADO)
+      await db
+        .update(schema.pre_ventas)
+        .set({
+          estado: 'ANULADO',
+          updated_at: sql`NOW()`
+        })
+        .where(eq(schema.pre_ventas.id, id))
+
+      return reply.code(200).send({
+        success: true,
+        message: 'Pre-venta anulada correctamente',
+        data: { id, estado: 'ANULADO' }
+      })
+    } catch (error) {
+      request.log.error(error)
+      return reply.code(500).send({
+        success: false,
+        message: 'Error al anular la pre-venta: ' + error.message
+      })
     }
   })
 }
