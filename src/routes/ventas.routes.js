@@ -461,23 +461,36 @@ async function ventasRoutes(fastify) {
               .limit(1)
             if (presInfo) {
               multiplicaPor = Math.max(1, Number(presInfo.multiplica_por || 1))
+            } else {
+              // Si el ID enviado no existe en la BD (ej. presentación antigua), buscar la principal del producto
+              presId = null
             }
-          } else if (item.producto_id) {
+          }
+
+          if (!presId && item.producto_id) {
             const [pres] = await tx
               .select({ id: schema.presentaciones.id, multiplica_por: schema.presentaciones.multiplica_por })
               .from(schema.presentaciones)
               .where(eq(schema.presentaciones.producto_uuid, item.producto_id))
+              .orderBy(schema.presentaciones.created_at)
               .limit(1)
             presId = pres?.id || null
             multiplicaPor = Math.max(1, Number(pres?.multiplica_por || 1))
           }
 
           if (!presId) {
+            const [prodInfo] = await tx
+              .select({ unidad_medida_id: schema.productos.unidad_medida_id })
+              .from(schema.productos)
+              .where(eq(schema.productos.id, item.producto_id))
+              .limit(1)
+
             const [nuevaPres] = await tx
               .insert(schema.presentaciones)
               .values({
                 producto_uuid: item.producto_id,
-                nombre: item.nombre || item.nombre_completo || 'UNIDAD',
+                nombre: item.nombre || item.nombre_completo || 'PRINCIPAL',
+                unidad_medida_id: prodInfo?.unidad_medida_id || 'NIU',
                 multiplica_por: 1,
                 precio_venta: Math.round(Number(item.precio_unitario || 0) * factorPrecio)
               })

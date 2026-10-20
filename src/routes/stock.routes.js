@@ -31,7 +31,7 @@ async function stockRoutes(fastify) {
     },
     async (request, reply) => {
     try {
-      const { almacen_id, categoria_id, estado_stock, q } = request.query
+      const { almacen_id, categoria_id, estado_stock, q, activo } = request.query
       const empresaId = request.user?.empresa_id
       const branchId = request.user?.branch_id
 
@@ -49,8 +49,11 @@ async function stockRoutes(fastify) {
       const almacenPrincipal = almacenesRows[0] || null
       const almacenFiltroId = almacen_id || null
 
-      // 2. Obtener productos activos de la empresa (RLS)
-      const prodConds = [eq(schema.productos.activo, true)]
+      // 2. Obtener productos de la empresa (RLS) con filtro opcional de activo
+      const prodConds = []
+      if (activo !== undefined && activo !== 'todos' && activo !== '') {
+        prodConds.push(eq(schema.productos.activo, activo === 'true' || activo === true))
+      }
       if (!request.user?.es_super_admin && empresaId) {
         prodConds.push(
           or(eq(schema.productos.empresa_id, empresaId), sql`${schema.productos.empresa_id} IS NULL`)
@@ -81,6 +84,7 @@ async function stockRoutes(fastify) {
           unidad_medida_id: schema.productos.unidad_medida_id,
           stock_minimo: schema.productos.stock_minimo,
           es_facturable: schema.productos.es_facturable,
+          activo: schema.productos.activo,
           categoria_id: schema.productos.categoria,
           categoria_nombre: schema.categorias.nombre,
           sub_categoria_nombre: schema.subcategoria.Nombre,
@@ -89,7 +93,7 @@ async function stockRoutes(fastify) {
         .from(schema.productos)
         .leftJoin(schema.categorias, eq(schema.productos.categoria, schema.categorias.id))
         .leftJoin(schema.subcategoria, eq(schema.productos.sub_categoria, schema.subcategoria.id))
-        .where(and(...prodConds))
+        .where(prodConds.length > 0 ? and(...prodConds) : undefined)
         .orderBy(desc(schema.productos.created_at))
 
       const { factorPrecio, factorVolumen } = await getFactores()
@@ -179,6 +183,7 @@ async function stockRoutes(fastify) {
               stock_actual_id: stockInfo?.stock_actual_id || null,
               producto_id: prod.id,
               presentacion_id: pres.id,
+              activo: prod.activo,
               codigo: prod.codigo || '-',
               codigo_barra: pres.cod_barra || prod.codigo_barra || '',
               producto_nombre: prod.nombre,
@@ -187,7 +192,7 @@ async function stockRoutes(fastify) {
               categoria_id: prod.categoria_id,
               categoria_nombre: prod.categoria_nombre || 'General',
               sub_categoria_nombre: prod.sub_categoria_nombre || '',
-              unidad_medida_id: prod.unidad_medida_id || 'NIU',
+              unidad_medida_id: pres.unidad_medida_id || prod.unidad_medida_id || 'NIU',
               multiplica_por: multiplicaPor,
               precio_costo: Number(pres.precio_costo || 0) / factorPrecio,
               precio_venta: Number(pres.precio_venta || 0) / factorPrecio,
@@ -209,6 +214,7 @@ async function stockRoutes(fastify) {
             stock_actual_id: null,
             producto_id: prod.id,
             presentacion_id: null,
+            activo: prod.activo,
             codigo: prod.codigo || '-',
             codigo_barra: prod.codigo_barra || '',
             producto_nombre: prod.nombre,

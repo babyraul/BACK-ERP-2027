@@ -386,7 +386,7 @@ CREATE TABLE IF NOT EXISTS "presentaciones" (
     "nombre" varchar(250) NOT NULL,
     "cod_barra" varchar(200),
     "palabra_clave" varchar(255),
-    "unidad_medida_id" bigint,
+    "unidad_medida_id" varchar(6),
     "multiplica_por" bigint DEFAULT 1,
     "ubicacion" varchar(100),
     "precio_costo" bigint DEFAULT 0,

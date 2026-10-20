@@ -81,11 +81,14 @@ async function productosRoutes(fastify) {
         // Datos de Categoría
         categoria_nombre: schema.categorias.nombre,
         // Datos de Subcategoría
-        sub_categoria_nombre: schema.subcategoria.Nombre
+        sub_categoria_nombre: schema.subcategoria.Nombre,
+        // Unidad de medida producto
+        unidad_medida_descripcion: schema.tipo_unidades_medida.descripcion
       })
       .from(schema.productos)
       .leftJoin(schema.categorias, eq(schema.productos.categoria, schema.categorias.id))
       .leftJoin(schema.subcategoria, eq(schema.productos.sub_categoria, schema.subcategoria.id))
+      .leftJoin(schema.tipo_unidades_medida, eq(schema.productos.unidad_medida_id, schema.tipo_unidades_medida.codigo))
 
     if (conditions.length > 0) {
       query = query.where(and(...conditions))
@@ -94,6 +97,18 @@ async function productosRoutes(fastify) {
     const productosRows = await query.orderBy(desc(schema.productos.created_at))
 
     const { factorPrecio, factorVolumen } = await getFactores()
+
+    // Cargar catálogo de unidades de medida para enriquecer presentaciones
+    const unidadesMedidaRows = await db
+      .select({
+        codigo: schema.tipo_unidades_medida.codigo,
+        descripcion: schema.tipo_unidades_medida.descripcion
+      })
+      .from(schema.tipo_unidades_medida)
+    const unidadesMap = {}
+    unidadesMedidaRows.forEach(u => {
+      if (u.codigo) unidadesMap[u.codigo] = u.descripcion
+    })
 
     // Cargar presentaciones y stock_actual asociados a los productos obtenidos
     const prodIds = productosRows.map(p => p.id)
@@ -138,11 +153,14 @@ async function productosRoutes(fastify) {
       const multiplicaPor = Math.max(1, Number(pres.multiplica_por || 1))
       const saldoBaseTotal = Number(stockPorProd[pres.producto_uuid] || 0)
       const stockPres = calcularStockPresentacion(saldoBaseTotal, multiplicaPor)
+      const presUnidad = pres.unidad_medida_id || null
 
       presMap[pres.producto_uuid].push({
         id: pres.id,
         nombre: pres.nombre,
         cod_barra: pres.cod_barra,
+        unidad_medida_id: presUnidad,
+        unidad_medida_descripcion: presUnidad ? (unidadesMap[presUnidad] || presUnidad) : null,
         multiplica_por: multiplicaPor,
         stock_actual: stockPres,
         stock_base_producto: saldoBaseTotal,
@@ -210,16 +228,30 @@ async function productosRoutes(fastify) {
         created_at: schema.productos.created_at,
         updated_at: schema.productos.updated_at,
         categoria_nombre: schema.categorias.nombre,
-        sub_categoria_nombre: schema.subcategoria.Nombre
+        sub_categoria_nombre: schema.subcategoria.Nombre,
+        unidad_medida_descripcion: schema.tipo_unidades_medida.descripcion
       })
       .from(schema.productos)
       .leftJoin(schema.categorias, eq(schema.productos.categoria, schema.categorias.id))
       .leftJoin(schema.subcategoria, eq(schema.productos.sub_categoria, schema.subcategoria.id))
+      .leftJoin(schema.tipo_unidades_medida, eq(schema.productos.unidad_medida_id, schema.tipo_unidades_medida.codigo))
       .where(eq(schema.productos.id, id))
 
     if (!producto) {
       throw fastify.httpErrors.notFound(`Producto no encontrado`)
     }
+
+    // Catálogo de unidades de medida para enriquecer presentaciones
+    const unidadesMedidaRows = await db
+      .select({
+        codigo: schema.tipo_unidades_medida.codigo,
+        descripcion: schema.tipo_unidades_medida.descripcion
+      })
+      .from(schema.tipo_unidades_medida)
+    const unidadesMap = {}
+    unidadesMedidaRows.forEach(u => {
+      if (u.codigo) unidadesMap[u.codigo] = u.descripcion
+    })
 
     // Obtener todas sus presentaciones y su stock_actual
     const branchId = request.user?.branch_id
@@ -250,10 +282,13 @@ async function productosRoutes(fastify) {
     const presentaciones = presRows.map(pres => {
       const multiplicaPor = Math.max(1, Number(pres.multiplica_por || 1))
       const stockPres = calcularStockPresentacion(stockProducto, multiplicaPor)
+      const presUnidad = pres.unidad_medida_id || null
       return {
         id: pres.id,
         nombre: pres.nombre,
         cod_barra: pres.cod_barra,
+        unidad_medida_id: presUnidad,
+        unidad_medida_descripcion: presUnidad ? (unidadesMap[presUnidad] || presUnidad) : null,
         multiplica_por: multiplicaPor,
         stock_actual: stockPres,
         stock_base_producto: stockProducto,
@@ -350,18 +385,18 @@ async function productosRoutes(fastify) {
     let presentacionesPayload = Array.isArray(payload.presentaciones) && payload.presentaciones.length > 0
       ? payload.presentaciones
       : [
-          {
-            nombre: payload.presentacion_nombre || 'UNIDAD',
-            cod_barra: payload.codigo_barra || null,
-            multiplica_por: 1,
-            precio_costo: Number(payload.precio_costo || 0),
-            precio_venta: Number(payload.precio_venta || 0),
-            precio_mayor: Number(payload.precio_mayor || 0),
-            precio_especial: Number(payload.precio_especial || 0),
-            precio_otros: Number(payload.precio_otros || 0),
-            activo: true
-          }
-        ]
+        {
+          nombre: payload.presentacion_nombre || 'UNIDAD',
+          cod_barra: payload.codigo_barra || null,
+          multiplica_por: 1,
+          precio_costo: Number(payload.precio_costo || 0),
+          precio_venta: Number(payload.precio_venta || 0),
+          precio_mayor: Number(payload.precio_mayor || 0),
+          precio_especial: Number(payload.precio_especial || 0),
+          precio_otros: Number(payload.precio_otros || 0),
+          activo: true
+        }
+      ]
 
     const toCentimos = (val) => Math.round(Number(val || 0) * factorPrecio)
 
@@ -402,12 +437,18 @@ async function productosRoutes(fastify) {
       // 2. Insertar Presentaciones asociadas multiplicadas por factorPrecio (céntimos en BD)
       const presInsertadas = []
       for (const pres of presentacionesPayload) {
+        const unidadMedidaPres = (pres.unidad_medida_id || payload.unidad_medida_id || 'NIU').trim()
+        if (!unidadMedidaPres) {
+          throw fastify.httpErrors.badRequest(`La presentación "${pres.nombre || 'UNIDAD'}" requiere una unidad de medida válida.`)
+        }
+
         const [pRow] = await tx
           .insert(schema.presentaciones)
           .values({
             producto_uuid: nuevoProducto.id,
             nombre: pres.nombre || 'UNIDAD',
             cod_barra: pres.cod_barra || payload.codigo_barra || null,
+            unidad_medida_id: unidadMedidaPres,
             multiplica_por: Number(pres.multiplica_por || 1),
             precio_costo: toCentimos(pres.precio_costo),
             precio_venta: toCentimos(pres.precio_venta),
@@ -486,33 +527,96 @@ async function productosRoutes(fastify) {
       // 2. Gestionar Presentaciones (Si se enviaron en el payload)
       let presActualizadas = []
       if (Array.isArray(payload.presentaciones) && payload.presentaciones.length > 0) {
-        // Eliminar presentaciones previas o sincronizar
-        await tx.delete(schema.presentaciones).where(eq(schema.presentaciones.producto_uuid, id))
+        // Obtener presentaciones existentes del producto para comparar y preservar UUIDs
+        const existentesDb = await tx
+          .select()
+          .from(schema.presentaciones)
+          .where(eq(schema.presentaciones.producto_uuid, id))
+
+        const existingMap = new Map()
+        existentesDb.forEach(p => existingMap.set(p.id, p))
+
+        const incomingIds = new Set()
 
         for (const pres of payload.presentaciones) {
-          const [pRow] = await tx
-            .insert(schema.presentaciones)
-            .values({
-              producto_uuid: id,
-              nombre: pres.nombre || 'UNIDAD',
-              cod_barra: pres.cod_barra || payload.codigo_barra || null,
-              multiplica_por: Number(pres.multiplica_por || 1),
-              precio_costo: toCentimos(pres.precio_costo),
-              precio_venta: toCentimos(pres.precio_venta),
-              precio_mayor: toCentimos(pres.precio_mayor),
-              precio_especial: toCentimos(pres.precio_especial),
-              precio_otros: toCentimos(pres.precio_otros),
-              activo: pres.activo ?? true
+          const presId = cleanUuid(pres.id)
+          const multiplicaPor = Number(pres.multiplica_por || 1)
+          const unidadMedidaPres = (pres.unidad_medida_id || payload.unidad_medida_id || existente.unidad_medida_id || 'NIU').trim()
+
+          if (!unidadMedidaPres) {
+            throw fastify.httpErrors.badRequest(`La presentación "${pres.nombre || 'UNIDAD'}" requiere una unidad de medida válida.`)
+          }
+
+          if (presId && existingMap.has(presId)) {
+            // A. UPDATE de presentación existente (mantiene su UUID para siempre)
+            incomingIds.add(presId)
+            const [pRow] = await tx
+              .update(schema.presentaciones)
+              .set({
+                nombre: pres.nombre || 'UNIDAD',
+                cod_barra: pres.cod_barra || payload.codigo_barra || null,
+                unidad_medida_id: unidadMedidaPres,
+                multiplica_por: multiplicaPor,
+                precio_costo: toCentimos(pres.precio_costo),
+                precio_venta: toCentimos(pres.precio_venta),
+                precio_mayor: toCentimos(pres.precio_mayor),
+                precio_especial: toCentimos(pres.precio_especial),
+                precio_otros: toCentimos(pres.precio_otros),
+                activo: pres.activo ?? true,
+                updated_at: sql`NOW()`
+              })
+              .where(eq(schema.presentaciones.id, presId))
+              .returning()
+
+            presActualizadas.push({
+              ...pRow,
+              precio_costo: Number(pRow.precio_costo || 0) / factorPrecio,
+              precio_venta: Number(pRow.precio_venta || 0) / factorPrecio,
+              precio_mayor: Number(pRow.precio_mayor || 0) / factorPrecio,
+              precio_especial: Number(pRow.precio_especial || 0) / factorPrecio,
+              precio_otros: Number(pRow.precio_otros || 0) / factorPrecio
             })
-            .returning()
-          presActualizadas.push({
-            ...pRow,
-            precio_costo: Number(pRow.precio_costo || 0) / factorPrecio,
-            precio_venta: Number(pRow.precio_venta || 0) / factorPrecio,
-            precio_mayor: Number(pRow.precio_mayor || 0) / factorPrecio,
-            precio_especial: Number(pRow.precio_especial || 0) / factorPrecio,
-            precio_otros: Number(pRow.precio_otros || 0) / factorPrecio
-          })
+          } else {
+            // B. INSERT de nueva presentación agregada por el usuario
+            const [pRow] = await tx
+              .insert(schema.presentaciones)
+              .values({
+                producto_uuid: id,
+                nombre: pres.nombre || 'UNIDAD',
+                cod_barra: pres.cod_barra || payload.codigo_barra || null,
+                unidad_medida_id: unidadMedidaPres,
+                multiplica_por: multiplicaPor,
+                precio_costo: toCentimos(pres.precio_costo),
+                precio_venta: toCentimos(pres.precio_venta),
+                precio_mayor: toCentimos(pres.precio_mayor),
+                precio_especial: toCentimos(pres.precio_especial),
+                precio_otros: toCentimos(pres.precio_otros),
+                activo: pres.activo ?? true
+              })
+              .returning()
+
+            incomingIds.add(pRow.id)
+            presActualizadas.push({
+              ...pRow,
+              precio_costo: Number(pRow.precio_costo || 0) / factorPrecio,
+              precio_venta: Number(pRow.precio_venta || 0) / factorPrecio,
+              precio_mayor: Number(pRow.precio_mayor || 0) / factorPrecio,
+              precio_especial: Number(pRow.precio_especial || 0) / factorPrecio,
+              precio_otros: Number(pRow.precio_otros || 0) / factorPrecio
+            })
+          }
+        }
+
+        // C. Eliminar ÚNICAMENTE las presentaciones que el usuario quitó explícitamente en el modal
+        const idsAEliminar = existentesDb
+          .map(p => p.id)
+          .filter(pid => !incomingIds.has(pid))
+
+        if (idsAEliminar.length > 0) {
+          const { inArray } = require('drizzle-orm')
+          await tx
+            .delete(schema.presentaciones)
+            .where(inArray(schema.presentaciones.id, idsAEliminar))
         }
       } else {
         // Si no se envió array, recuperar las existentes convirtiendo a decimal

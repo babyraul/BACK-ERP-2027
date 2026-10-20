@@ -617,8 +617,7 @@ const presentaciones = (0, import_pg_core.pgTable)("presentaciones", {
   nombre: (0, import_pg_core.varchar)("nombre", { length: 250 }).notNull(),
   cod_barra: (0, import_pg_core.varchar)("cod_barra", { length: 200 }),
   palabra_clave: (0, import_pg_core.varchar)("palabra_clave", { length: 255 }),
-  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
-  unidad_medida_id: (0, import_pg_core.bigint)("unidad_medida_id", { mode: "number" }),
+  unidad_medida_id: (0, import_pg_core.varchar)("unidad_medida_id", { length: 6 }),
   // You can use { mode: "bigint" } if numbers are exceeding js number limitations
   multiplica_por: (0, import_pg_core.bigint)("multiplica_por", { mode: "number" }).default(1),
   ubicacion: (0, import_pg_core.varchar)("ubicacion", { length: 100 }),
