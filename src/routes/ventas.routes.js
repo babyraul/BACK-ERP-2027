@@ -34,12 +34,20 @@ async function ventasRoutes(fastify) {
         conditions.push(eq(schema.ventas.tipo_comprobante_id, tipoId))
       }
 
+      // Normalizar fecha real de emisión (corrige registros donde toISOString() guardó hora UTC +5h en columna timestamp without time zone)
+      const fechaEfectivaExpr = sql`CASE 
+        WHEN ${schema.ventas.created_at} IS NOT NULL 
+         AND ${schema.ventas.fecha_emision} > (${schema.ventas.created_at} + INTERVAL '4 hours')
+        THEN ${schema.ventas.created_at}
+        ELSE COALESCE(${schema.ventas.fecha_emision}, ${schema.ventas.created_at})
+      END`
+
       if (fecha_inicio) {
-        conditions.push(sql`DATE(${schema.ventas.fecha_emision}) >= ${fecha_inicio}::date`)
+        conditions.push(sql`DATE(${fechaEfectivaExpr}) >= ${fecha_inicio}::date`)
       }
 
       if (fecha_fin) {
-        conditions.push(sql`DATE(${schema.ventas.fecha_emision}) <= ${fecha_fin}::date`)
+        conditions.push(sql`DATE(${fechaEfectivaExpr}) <= ${fecha_fin}::date`)
       }
 
       if (q && q.trim()) {
@@ -79,7 +87,7 @@ async function ventasRoutes(fastify) {
           END`,
           placa: schema.ventas.alias,
           moneda: schema.ventas.moneda,
-          fecha_emision: schema.ventas.fecha_emision,
+          fecha_emision: fechaEfectivaExpr,
           gravadas: sql`ROUND(CAST(COALESCE(${schema.ventas.gravadas}, 0) AS numeric) / ${factorPrecio}, 2)`,
           exoneradas: sql`ROUND(CAST(COALESCE(${schema.ventas.exoneradas}, 0) AS numeric) / ${factorPrecio}, 2)`,
           inafectas: sql`ROUND(CAST(COALESCE(${schema.ventas.inafectas}, 0) AS numeric) / ${factorPrecio}, 2)`,
@@ -150,7 +158,12 @@ async function ventasRoutes(fastify) {
           END`,
           placa: schema.ventas.alias,
           moneda: schema.ventas.moneda,
-          fecha_emision: schema.ventas.fecha_emision,
+          fecha_emision: sql`CASE 
+            WHEN ${schema.ventas.created_at} IS NOT NULL 
+             AND ${schema.ventas.fecha_emision} > (${schema.ventas.created_at} + INTERVAL '4 hours')
+            THEN ${schema.ventas.created_at}
+            ELSE COALESCE(${schema.ventas.fecha_emision}, ${schema.ventas.created_at})
+          END`,
           gravadas: sql`ROUND(CAST(${schema.ventas.gravadas} AS numeric) / ${factorPrecio}, 2)`,
           igv: sql`ROUND(CAST(${schema.ventas.igv} AS numeric) / ${factorPrecio}, 2)`,
           total: sql`ROUND(CAST(${schema.ventas.total_venta} AS numeric) / ${factorPrecio}, 2)`,
@@ -347,12 +360,12 @@ async function ventasRoutes(fastify) {
         const serieAsignada = serieConfig.serie
         const correlativoAsignado = (serieConfig.correlativo || 0) + 1
 
-        // Incrementar correlativo de forma atómica en la fila bloqueada
+          // Incrementar correlativo de forma atómica en la fila bloqueada
         await tx
           .update(schema.caja_serie_correlativo)
           .set({
             correlativo: correlativoAsignado,
-            updated_at: new Date().toISOString()
+            updated_at: sql`NOW()`
           })
           .where(eq(schema.caja_serie_correlativo.id, serieConfig.id))
 
@@ -393,7 +406,7 @@ async function ventasRoutes(fastify) {
             estado: 'EMITIDO',
             estado_pago: 'PAGADO',
             facturado: false, // Se actualiza posteriormente con el módulo de facturación electrónica
-            fecha_emision: new Date().toISOString()
+            fecha_emision: sql`NOW()`
           })
           .returning()
 
@@ -456,7 +469,7 @@ async function ventasRoutes(fastify) {
               .update(schema.stock_actual)
               .set({
                 saldo_actual: sql`GREATEST(0, COALESCE(${schema.stock_actual.saldo_actual}, 0) - ${cant})`,
-                updated_at: new Date().toISOString()
+                updated_at: sql`NOW()`
               })
               .where(
                 and(
@@ -481,7 +494,7 @@ async function ventasRoutes(fastify) {
             monto: montoInt,
             numero_operacion: p.referencia || null,
             estado: 'PAGADO',
-            fecha_pago: new Date().toISOString()
+            fecha_pago: sql`NOW()`
           })
         }
 
@@ -491,7 +504,7 @@ async function ventasRoutes(fastify) {
             .update(schema.pre_ventas)
             .set({
               estado: 'PROCESADA',
-              updated_at: new Date().toISOString()
+              updated_at: sql`NOW()`
             })
             .where(eq(schema.pre_ventas.id, preventa_id))
         }
@@ -534,7 +547,7 @@ async function ventasRoutes(fastify) {
         .set({
           estado: 'ANULADO',
           observacion_venta: motivo ? `ANULADO: ${motivo}` : 'ANULADO',
-          updated_at: new Date().toISOString()
+          updated_at: sql`NOW()`
         })
         .where(eq(schema.ventas.id, id))
 

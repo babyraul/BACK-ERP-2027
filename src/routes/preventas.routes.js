@@ -12,6 +12,13 @@ const { getFactores, toPrecioInt } = require('../utils/factores')
 async function preventasRoutes(fastify) {
   const auth = { preHandler: [fastify.authenticate] }
 
+  const fechaEfectivaExpr = sql`CASE 
+    WHEN ${schema.pre_ventas.created_at} IS NOT NULL 
+     AND ${schema.pre_ventas.fecha_emision} > (${schema.pre_ventas.created_at} + INTERVAL '4 hours')
+    THEN ${schema.pre_ventas.created_at}
+    ELSE COALESCE(${schema.pre_ventas.fecha_emision}, ${schema.pre_ventas.created_at})
+  END`
+
   // 1. GET /api/preventas - Listar preventas con filtros
   fastify.get('/', auth, async (request, reply) => {
     try {
@@ -32,11 +39,11 @@ async function preventasRoutes(fastify) {
       }
 
       if (fecha_inicio) {
-        conditions.push(sql`DATE(${schema.pre_ventas.fecha_emision}) >= ${fecha_inicio}::date`)
+        conditions.push(sql`DATE(${fechaEfectivaExpr}) >= ${fecha_inicio}::date`)
       }
 
       if (fecha_fin) {
-        conditions.push(sql`DATE(${schema.pre_ventas.fecha_emision}) <= ${fecha_fin}::date`)
+        conditions.push(sql`DATE(${fechaEfectivaExpr}) <= ${fecha_fin}::date`)
       }
 
       if (q && q.trim()) {
@@ -76,7 +83,7 @@ async function preventasRoutes(fastify) {
           alias: schema.pre_ventas.alias,
           placa: schema.pre_ventas.alias,
           moneda: schema.pre_ventas.moneda,
-          fecha_emision: schema.pre_ventas.fecha_emision,
+          fecha_emision: fechaEfectivaExpr,
           gravadas: sql`ROUND(CAST(${schema.pre_ventas.gravadas} AS numeric) / ${factorPrecio}, 2)`,
           igv: sql`ROUND(CAST(${schema.pre_ventas.igv} AS numeric) / ${factorPrecio}, 2)`,
           total: sql`ROUND(CAST(${schema.pre_ventas.total_venta} AS numeric) / ${factorPrecio}, 2)`,
@@ -126,7 +133,7 @@ async function preventasRoutes(fastify) {
           alias: schema.pre_ventas.alias,
           placa: schema.pre_ventas.alias,
           moneda: schema.pre_ventas.moneda,
-          fecha_emision: schema.pre_ventas.fecha_emision,
+          fecha_emision: fechaEfectivaExpr,
           gravadas: sql`ROUND(CAST(${schema.pre_ventas.gravadas} AS numeric) / ${factorPrecio}, 2)`,
           igv: sql`ROUND(CAST(${schema.pre_ventas.igv} AS numeric) / ${factorPrecio}, 2)`,
           total: sql`ROUND(CAST(${schema.pre_ventas.total_venta} AS numeric) / ${factorPrecio}, 2)`,
@@ -243,7 +250,7 @@ async function preventasRoutes(fastify) {
             igv: igvInt,
             total_venta: totalVentaInt,
             estado: 'PENDIENTE',
-            fecha_emision: new Date().toISOString()
+            fecha_emision: sql`NOW()`
           })
           .returning()
 
