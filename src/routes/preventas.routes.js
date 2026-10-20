@@ -200,6 +200,10 @@ async function preventasRoutes(fastify) {
         alias,
         items = [],
         gravado = 0,
+        exonerado = 0,
+        inafecto = 0,
+        gratuito = 0,
+        icbper = 0,
         igv = 0,
         total = 0
       } = request.body
@@ -230,17 +234,88 @@ async function preventasRoutes(fastify) {
 
       const { factorPrecio, factorVolumen } = await getFactores()
 
-      // Convertir a enteros para almacenamiento en campos bigint
-      const totalVisual = Number(total || 0)
-      const gravadoVisual = Number(gravado || (totalVisual / 1.18).toFixed(2))
-      const igvVisual = Number(igv || (totalVisual - gravadoVisual).toFixed(2))
-
-      const gravadasInt = Math.round(gravadoVisual * factorPrecio)
-      const igvInt = Math.round(igvVisual * factorPrecio)
-      const totalVentaInt = Math.round(totalVisual * factorPrecio)
-
       // Iniciar Transacción
       const result = await db.transaction(async (tx) => {
+        // Pre-cargar tipo_tributo de BD para productos si no vienen explícitos
+        const prodIds = items.map((i) => i.producto_id).filter(isUUID)
+        let prodsMap = {}
+        if (prodIds.length > 0) {
+          const prodsDb = await tx
+            .select({
+              id: schema.productos.id,
+              tipo_tributo: schema.productos.tipo_tributo
+            })
+            .from(schema.productos)
+            .where(inArray(schema.productos.id, prodIds))
+          prodsDb.forEach((p) => {
+            prodsMap[p.id] = p.tipo_tributo
+          })
+        }
+
+        let gravadasTotalCalc = 0
+        let exoneradasTotalCalc = 0
+        let inafectasTotalCalc = 0
+        let gratuitasTotalCalc = 0
+        let igvTotalCalc = 0
+
+        const itemsProcesados = items.map((item) => {
+          const cantVisual = Number(item.cantidad || 1)
+          const precioVisual = Number(item.precio_unitario || item.precio || 0)
+          const descVisual = Number(item.descuento || 0)
+          const isGratuito = Boolean(item.gratuito || item.es_gratuito)
+
+          const afectacionRaw = String(item.tipo_afectacion_igv || prodsMap[item.producto_id] || '10').trim()
+          const afectacionNum = parseInt(afectacionRaw, 10) || 10
+
+          let itemSubtotalVisual = 0
+          let itemIgvVisual = 0
+          let itemTotalVisual = 0
+
+          if (isGratuito || (afectacionNum >= 11 && afectacionNum <= 16) || afectacionNum === 21 || (afectacionNum >= 31 && afectacionNum <= 37)) {
+            itemTotalVisual = 0
+            itemSubtotalVisual = 0
+            itemIgvVisual = 0
+            gratuitasTotalCalc += Number((cantVisual * precioVisual).toFixed(2))
+          } else if (afectacionNum === 20) {
+            itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
+            itemSubtotalVisual = itemTotalVisual
+            itemIgvVisual = 0
+            exoneradasTotalCalc += itemSubtotalVisual
+          } else if (afectacionNum === 30 || afectacionNum === 40) {
+            itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
+            itemSubtotalVisual = itemTotalVisual
+            itemIgvVisual = 0
+            inafectasTotalCalc += itemSubtotalVisual
+          } else {
+            itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
+            itemSubtotalVisual = Number((itemTotalVisual / 1.18).toFixed(2))
+            itemIgvVisual = Number((itemTotalVisual - itemSubtotalVisual).toFixed(2))
+            gravadasTotalCalc += itemSubtotalVisual
+            igvTotalCalc += itemIgvVisual
+          }
+
+          return {
+            ...item,
+            cantVisual,
+            precioVisual,
+            descVisual,
+            afectacionNum,
+            itemTotalVisual,
+            itemSubtotalVisual,
+            itemIgvVisual
+          }
+        })
+
+        const totalVisual = Number(total || 0) > 0
+          ? Number(total)
+          : Number((gravadasTotalCalc + igvTotalCalc + exoneradasTotalCalc + inafectasTotalCalc).toFixed(2))
+
+        const gravadasInt = Math.round(gravadasTotalCalc * factorPrecio)
+        const exoneradasInt = Math.round(exoneradasTotalCalc * factorPrecio)
+        const inafectasInt = Math.round(inafectasTotalCalc * factorPrecio)
+        const igvInt = Math.round(igvTotalCalc * factorPrecio)
+        const totalVentaInt = Math.round(totalVisual * factorPrecio)
+
         // A. Insertar cabecera pre_ventas
         const [nuevaPreventa] = await tx
           .insert(schema.pre_ventas)
@@ -254,6 +329,8 @@ async function preventasRoutes(fastify) {
             moneda: 'PEN',
             tipo_cambio: 1,
             gravadas: gravadasInt,
+            exoneradas: exoneradasInt,
+            inafectas: inafectasInt,
             igv: igvInt,
             total_venta: totalVentaInt,
             estado: 'PENDIENTE',
@@ -262,7 +339,7 @@ async function preventasRoutes(fastify) {
           .returning()
 
         // B. Insertar detalle_pre_ventas
-        for (const item of items) {
+        for (const item of itemsProcesados) {
           // Si no tiene presentacion_id, buscar la presentación predeterminada del producto
           let presId = item.presentacion_id
           if (!presId && item.producto_id) {
@@ -281,23 +358,17 @@ async function preventasRoutes(fastify) {
               .values({
                 producto_uuid: item.producto_id,
                 nombre: item.nombre_completo || 'UNIDAD',
-                precio_venta: Math.round(Number(item.precio_unitario || 0) * factorPrecio)
+                precio_venta: Math.round(Number(item.precioVisual || 0) * factorPrecio)
               })
               .returning()
             presId = nuevaPres.id
           }
 
-          const cantVisual = Number(item.cantidad || 1)
-          const cantInt = toVolumenInt(cantVisual, factorVolumen)
-          const precioVisual = Number(item.precio_unitario || item.precio || 0)
-          const precioInt = Math.round(precioVisual * factorPrecio)
-          const itemTotalVisual = Number((cantVisual * precioVisual).toFixed(2))
-          const itemSubtotalVisual = Number((itemTotalVisual / 1.18).toFixed(2))
-          const itemIgvVisual = Number((itemTotalVisual - itemSubtotalVisual).toFixed(2))
-
-          const itemTotalInt = Math.round(itemTotalVisual * factorPrecio)
-          const itemSubtotalInt = Math.round(itemSubtotalVisual * factorPrecio)
-          const itemIgvInt = Math.round(itemIgvVisual * factorPrecio)
+          const cantInt = toVolumenInt(item.cantVisual, factorVolumen)
+          const precioInt = Math.round(item.precioVisual * factorPrecio)
+          const itemTotalInt = Math.round(item.itemTotalVisual * factorPrecio)
+          const itemSubtotalInt = Math.round(item.itemSubtotalVisual * factorPrecio)
+          const itemIgvInt = Math.round(item.itemIgvVisual * factorPrecio)
 
           await tx.insert(schema.detalle_pre_ventas).values({
             preventa_id: nuevaPreventa.id,
@@ -340,6 +411,10 @@ async function preventasRoutes(fastify) {
         alias,
         items = [],
         gravado = 0,
+        exonerado = 0,
+        inafecto = 0,
+        gratuito = 0,
+        icbper = 0,
         igv = 0,
         total = 0
       } = request.body || {}
@@ -365,15 +440,89 @@ async function preventasRoutes(fastify) {
 
       const { factorPrecio, factorVolumen } = await getFactores()
 
-      const totalVisual = Number(total || 0)
-      const gravadoVisual = Number(gravado || (totalVisual / 1.18).toFixed(2))
-      const igvVisual = Number(igv || (totalVisual - gravadoVisual).toFixed(2))
-
-      const gravadasInt = Math.round(gravadoVisual * factorPrecio)
-      const igvInt = Math.round(igvVisual * factorPrecio)
-      const totalVentaInt = Math.round(totalVisual * factorPrecio)
-
       await db.transaction(async (tx) => {
+        // Pre-cargar tipo_tributo de BD para productos si no vienen explícitos
+        const prodIds = items.map((i) => i.producto_id || i.id).filter(isUUID)
+        let prodsMap = {}
+        if (prodIds.length > 0) {
+          const prodsDb = await tx
+            .select({
+              id: schema.productos.id,
+              tipo_tributo: schema.productos.tipo_tributo
+            })
+            .from(schema.productos)
+            .where(inArray(schema.productos.id, prodIds))
+          prodsDb.forEach((p) => {
+            prodsMap[p.id] = p.tipo_tributo
+          })
+        }
+
+        let gravadasTotalCalc = 0
+        let exoneradasTotalCalc = 0
+        let inafectasTotalCalc = 0
+        let gratuitasTotalCalc = 0
+        let igvTotalCalc = 0
+
+        const itemsProcesados = items.map((item) => {
+          const prodId = item.producto_id || item.id
+          const cantVisual = Number(item.cantidad || 1)
+          const precioVisual = Number(item.precio_unitario || item.precio || 0)
+          const descVisual = Number(item.descuento || 0)
+          const isGratuito = Boolean(item.gratuito || item.es_gratuito)
+
+          const afectacionRaw = String(item.tipo_afectacion_igv || prodsMap[prodId] || '10').trim()
+          const afectacionNum = parseInt(afectacionRaw, 10) || 10
+
+          let itemSubtotalVisual = 0
+          let itemIgvVisual = 0
+          let itemTotalVisual = 0
+
+          if (isGratuito || (afectacionNum >= 11 && afectacionNum <= 16) || afectacionNum === 21 || (afectacionNum >= 31 && afectacionNum <= 37)) {
+            itemTotalVisual = 0
+            itemSubtotalVisual = 0
+            itemIgvVisual = 0
+            gratuitasTotalCalc += Number((cantVisual * precioVisual).toFixed(2))
+          } else if (afectacionNum === 20) {
+            itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
+            itemSubtotalVisual = itemTotalVisual
+            itemIgvVisual = 0
+            exoneradasTotalCalc += itemSubtotalVisual
+          } else if (afectacionNum === 30 || afectacionNum === 40) {
+            itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
+            itemSubtotalVisual = itemTotalVisual
+            itemIgvVisual = 0
+            inafectasTotalCalc += itemSubtotalVisual
+          } else {
+            itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
+            itemSubtotalVisual = Number((itemTotalVisual / 1.18).toFixed(2))
+            itemIgvVisual = Number((itemTotalVisual - itemSubtotalVisual).toFixed(2))
+            gravadasTotalCalc += itemSubtotalVisual
+            igvTotalCalc += itemIgvVisual
+          }
+
+          return {
+            ...item,
+            prodId,
+            cantVisual,
+            precioVisual,
+            descVisual,
+            afectacionNum,
+            itemTotalVisual,
+            itemSubtotalVisual,
+            itemIgvVisual
+          }
+        })
+
+        const totalVisual = Number(total || 0) > 0
+          ? Number(total)
+          : Number((gravadasTotalCalc + igvTotalCalc + exoneradasTotalCalc + inafectasTotalCalc).toFixed(2))
+
+        const gravadasInt = Math.round(gravadasTotalCalc * factorPrecio)
+        const exoneradasInt = Math.round(exoneradasTotalCalc * factorPrecio)
+        const inafectasInt = Math.round(inafectasTotalCalc * factorPrecio)
+        const igvInt = Math.round(igvTotalCalc * factorPrecio)
+        const totalVentaInt = Math.round(totalVisual * factorPrecio)
+
         // A. Actualizar cabecera
         const aliasFinal = alias !== undefined ? alias : (placa !== undefined ? placa : existente.alias)
         await tx
@@ -383,6 +532,8 @@ async function preventasRoutes(fastify) {
             tipo_comprobante_id: tipoComprobanteId,
             alias: aliasFinal,
             gravadas: gravadasInt,
+            exoneradas: exoneradasInt,
+            inafectas: inafectasInt,
             igv: igvInt,
             total_venta: totalVentaInt,
             updated_at: sql`NOW()`
@@ -390,11 +541,11 @@ async function preventasRoutes(fastify) {
           .where(eq(schema.pre_ventas.id, id))
 
         // B. Reemplazar detalle si vienen ítems
-        if (items && items.length > 0) {
+        if (itemsProcesados && itemsProcesados.length > 0) {
           await tx.delete(schema.detalle_pre_ventas).where(eq(schema.detalle_pre_ventas.preventa_id, id))
 
-          for (const item of items) {
-            const prodId = item.producto_id || item.id
+          for (const item of itemsProcesados) {
+            const prodId = item.prodId
             if (!prodId || !isUUID(prodId)) {
               request.log.warn({ item }, '[PUT /preventas/:id] Saltando ítem sin producto_id válido')
               continue
@@ -416,23 +567,17 @@ async function preventasRoutes(fastify) {
                 .values({
                   producto_uuid: prodId,
                   nombre: item.nombre_completo || item.producto_nombre || 'UNIDAD',
-                  precio_venta: Math.round(Number(item.precio_unitario || item.precio || 0) * factorPrecio)
+                  precio_venta: Math.round(Number(item.precioVisual || 0) * factorPrecio)
                 })
                 .returning()
               presId = nuevaPres.id
             }
 
-            const cantVisual = Math.max(0.0001, Number(item.cantidad || 1))
-            const cantInt = toVolumenInt(cantVisual, factorVolumen)
-            const precioVisual = Number(item.precio_unitario || item.precio || 0)
-            const precioInt = Math.round(precioVisual * factorPrecio)
-            const itemTotalVisual = Number((cantVisual * precioVisual).toFixed(2))
-            const itemSubtotalVisual = Number((itemTotalVisual / 1.18).toFixed(2))
-            const itemIgvVisual = Number((itemTotalVisual - itemSubtotalVisual).toFixed(2))
-
-            const itemTotalInt = Math.round(itemTotalVisual * factorPrecio)
-            const itemSubtotalInt = Math.round(itemSubtotalVisual * factorPrecio)
-            const itemIgvInt = Math.round(itemIgvVisual * factorPrecio)
+            const cantInt = toVolumenInt(item.cantVisual, factorVolumen)
+            const precioInt = Math.round(item.precioVisual * factorPrecio)
+            const itemTotalInt = Math.round(item.itemTotalVisual * factorPrecio)
+            const itemSubtotalInt = Math.round(item.itemSubtotalVisual * factorPrecio)
+            const itemIgvInt = Math.round(item.itemIgvVisual * factorPrecio)
 
             await tx.insert(schema.detalle_pre_ventas).values({
               preventa_id: id,

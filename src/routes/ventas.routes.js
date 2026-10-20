@@ -265,6 +265,12 @@ async function ventasRoutes(fastify) {
         guia_remision,
         pagos = [],
         items = [],
+        gravado = 0,
+        exonerado = 0,
+        inafecto = 0,
+        gratuito = 0,
+        icbper = 0,
+        igv = 0,
         total = 0
       } = request.body
 
@@ -396,18 +402,97 @@ async function ventasRoutes(fastify) {
 
         const { factorPrecio, factorVolumen } = await getFactores()
 
-        const totalVisual = Number(total || 0)
-        const gravadoVisual = Number((totalVisual / 1.18).toFixed(2))
-        const igvVisual = Number((totalVisual - gravadoVisual).toFixed(2))
-
-        const gravadasInt = Math.round(gravadoVisual * factorPrecio)
-        const igvInt = Math.round(igvVisual * factorPrecio)
-        const totalVentaInt = Math.round(totalVisual * factorPrecio)
-
         // Determinar si es facturable ante SUNAT
         const esFacturableSunat = tipoComprobanteId === '01' || tipoComprobanteId === '03'
         const isUUID = (str) =>
           Boolean(str && typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str))
+
+        // Pre-cargar productos para asegurar su tipo_afectacion_igv real desde BD si no viene o viene por defecto
+        const prodIds = items.map((i) => i.producto_id).filter(isUUID)
+        let prodsMap = {}
+        if (prodIds.length > 0) {
+          const prodsDb = await tx
+            .select({
+              id: schema.productos.id,
+              tipo_tributo: schema.productos.tipo_tributo
+            })
+            .from(schema.productos)
+            .where(inArray(schema.productos.id, prodIds))
+          prodsDb.forEach((p) => {
+            prodsMap[p.id] = p.tipo_tributo
+          })
+        }
+
+        // Acumuladores de bases fiscales calculadas a partir de cada ítem
+        let gravadasTotalCalc = 0
+        let exoneradasTotalCalc = 0
+        let inafectasTotalCalc = 0
+        let gratuitasTotalCalc = 0
+        let igvTotalCalc = 0
+
+        const itemsProcesados = items.map((item) => {
+          const cantVisual = Number(item.cantidad || 1)
+          const precioVisual = Number(item.precio_unitario || item.precio || 0)
+          const descVisual = Number(item.descuento || 0)
+          const isGratuito = Boolean(item.gratuito || item.es_gratuito)
+
+          // Afectación: tomar de item o de BD (Productos.tipo_tributo)
+          const afectacionRaw = String(item.tipo_afectacion_igv || prodsMap[item.producto_id] || '10').trim()
+          const afectacionNum = parseInt(afectacionRaw, 10) || 10
+
+          let itemSubtotalVisual = 0
+          let itemIgvVisual = 0
+          let itemTotalVisual = 0
+
+          if (isGratuito || (afectacionNum >= 11 && afectacionNum <= 16) || afectacionNum === 21 || (afectacionNum >= 31 && afectacionNum <= 37)) {
+            // Operación Gratuita
+            itemTotalVisual = 0
+            itemSubtotalVisual = 0
+            itemIgvVisual = 0
+            gratuitasTotalCalc += Number((cantVisual * precioVisual).toFixed(2))
+          } else if (afectacionNum === 20) {
+            // Exonerada (tasa 0%)
+            itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
+            itemSubtotalVisual = itemTotalVisual
+            itemIgvVisual = 0
+            exoneradasTotalCalc += itemSubtotalVisual
+          } else if (afectacionNum === 30 || afectacionNum === 40) {
+            // Inafecta / Exportación (tasa 0%)
+            itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
+            itemSubtotalVisual = itemTotalVisual
+            itemIgvVisual = 0
+            inafectasTotalCalc += itemSubtotalVisual
+          } else {
+            // Gravada (10, 17, etc.) - Desglose 1.18
+            itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
+            itemSubtotalVisual = Number((itemTotalVisual / 1.18).toFixed(2))
+            itemIgvVisual = Number((itemTotalVisual - itemSubtotalVisual).toFixed(2))
+            gravadasTotalCalc += itemSubtotalVisual
+            igvTotalCalc += itemIgvVisual
+          }
+
+          return {
+            ...item,
+            cantVisual,
+            precioVisual,
+            descVisual,
+            afectacionNum,
+            itemTotalVisual,
+            itemSubtotalVisual,
+            itemIgvVisual
+          }
+        })
+
+        const totalVisual = Number(total || 0) > 0
+          ? Number(total)
+          : Number((gravadasTotalCalc + igvTotalCalc + exoneradasTotalCalc + inafectasTotalCalc).toFixed(2))
+
+        const gravadasInt = Math.round(gravadasTotalCalc * factorPrecio)
+        const exoneradasInt = Math.round(exoneradasTotalCalc * factorPrecio)
+        const inafectasInt = Math.round(inafectasTotalCalc * factorPrecio)
+        const gratuitasInt = Math.round(gratuitasTotalCalc * factorPrecio)
+        const igvInt = Math.round(igvTotalCalc * factorPrecio)
+        const totalVentaInt = Math.round(totalVisual * factorPrecio)
 
         // B. Insertar cabecera de la Venta
         const [nuevaVenta] = await tx
@@ -425,6 +510,9 @@ async function ventasRoutes(fastify) {
             moneda: 'PEN',
             tipo_cambio: 1,
             gravadas: gravadasInt,
+            exoneradas: exoneradasInt,
+            inafectas: inafectasInt,
+            gratuitas: gratuitasInt,
             igv: igvInt,
             total_venta: totalVentaInt,
             observacion_venta: observaciones || null,
@@ -459,7 +547,7 @@ async function ventasRoutes(fastify) {
         }
 
         // C. Insertar detalle de venta y registrar movimiento de stock (stock_actual + kardex stock)
-        for (const item of items) {
+        for (const item of itemsProcesados) {
           let presId = item.presentacion_id
           let multiplicaPor = 1
 
@@ -509,20 +597,14 @@ async function ventasRoutes(fastify) {
             multiplicaPor = 1
           }
 
-          const cantVisual = Number(item.cantidad || 1)
+          const cantVisual = item.cantVisual
           const cantidadBaseVisual = cantVisual * multiplicaPor
           const cantInt = toVolumenInt(cantVisual, factorVolumen)
-          const cantidadBaseInt = toVolumenInt(cantidadBaseVisual, factorVolumen)
-
-          const precioVisual = Number(item.precio_unitario || 0)
-          const precioInt = Math.round(precioVisual * factorPrecio)
-          const itemTotalVisual = Number((cantVisual * precioVisual).toFixed(2))
-          const itemSubtotalVisual = Number((itemTotalVisual / 1.18).toFixed(2))
-          const itemIgvVisual = Number((itemTotalVisual - itemSubtotalVisual).toFixed(2))
-
-          const itemTotalInt = Math.round(itemTotalVisual * factorPrecio)
-          const itemSubtotalInt = Math.round(itemSubtotalVisual * factorPrecio)
-          const itemIgvInt = Math.round(itemIgvVisual * factorPrecio)
+          const precioInt = Math.round(item.precioVisual * factorPrecio)
+          const descInt = Math.round(item.descVisual * factorPrecio)
+          const itemTotalInt = Math.round(item.itemTotalVisual * factorPrecio)
+          const itemSubtotalInt = Math.round(item.itemSubtotalVisual * factorPrecio)
+          const itemIgvInt = Math.round(item.itemIgvVisual * factorPrecio)
 
           await tx.insert(schema.detalle_ventas).values({
             venta_id: nuevaVenta.id,
@@ -532,7 +614,9 @@ async function ventasRoutes(fastify) {
             precio_unitario: precioInt,
             subtotal: itemSubtotalInt,
             igv: itemIgvInt,
-            total: itemTotalInt
+            total: itemTotalInt,
+            descuento: descInt,
+            tipo_afectacion_igv: item.afectacionNum
           })
 
           // D. Actualizar stock_actual (permitiendo stock negativo) e insertar Kárdex en tabla stock (escalado por factorVolumen)
