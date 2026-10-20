@@ -192,10 +192,16 @@ async function ventasRoutes(fastify) {
         .select({
           id: schema.detalle_ventas.id,
           producto_id: schema.detalle_ventas.producto_id,
+          producto_codigo: schema.productos.codigo,
           producto_nombre: schema.productos.nombre,
-          unidad_medida_id: schema.productos.unidad_medida_id,
+          producto_unidad_medida_id: schema.productos.unidad_medida_id,
           presentacion_id: schema.detalle_ventas.presentacion_id,
           presentacion_nombre: schema.presentaciones.nombre,
+          presentacion_unidad_medida_id: schema.presentaciones.unidad_medida_id,
+          cod_barra: sql`COALESCE(${schema.presentaciones.cod_barra}, ${schema.productos.codigo_barra})`,
+          precio_costo: sql`ROUND(CAST(COALESCE(${schema.presentaciones.precio_costo}, ${schema.productos.stock_minimo}, 0) AS numeric) / ${factorPrecio}, 2)`,
+          precio_mayor: sql`ROUND(CAST(COALESCE(${schema.presentaciones.precio_mayor}, 0) AS numeric) / ${factorPrecio}, 2)`,
+          precio_especial: sql`ROUND(CAST(COALESCE(${schema.presentaciones.precio_especial}, 0) AS numeric) / ${factorPrecio}, 2)`,
           cantidad: schema.detalle_ventas.cantidad,
           precio_unitario: sql`ROUND(CAST(${schema.detalle_ventas.precio_unitario} AS numeric) / ${factorPrecio}, 2)`,
           subtotal: sql`ROUND(CAST(${schema.detalle_ventas.subtotal} AS numeric) / ${factorPrecio}, 2)`,
@@ -207,11 +213,15 @@ async function ventasRoutes(fastify) {
         .leftJoin(schema.presentaciones, eq(schema.detalle_ventas.presentacion_id, schema.presentaciones.id))
         .where(eq(schema.detalle_ventas.venta_id, id))
 
-      const items = rawItems.map((it) => ({
-        ...it,
-        cantidad: toVolumenVisual(it.cantidad, factorVolumen),
-        cantidad_raw: Number(it.cantidad || 0)
-      }))
+      const items = rawItems.map((it) => {
+        const unidad = it.presentacion_unidad_medida_id || it.producto_unidad_medida_id || 'NIU'
+        return {
+          ...it,
+          unidad_medida_id: unidad,
+          cantidad: toVolumenVisual(it.cantidad, factorVolumen),
+          cantidad_raw: Number(it.cantidad || 0)
+        }
+      })
 
       // Detalle de pagos asociados
       const pagos = await db
