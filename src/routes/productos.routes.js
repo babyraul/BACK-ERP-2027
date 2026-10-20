@@ -89,26 +89,58 @@ async function productosRoutes(fastify) {
 
     const { factorPrecio, factorVolumen } = await getFactores()
 
-    // Cargar presentaciones asociadas a los productos obtenidos
+    // Cargar presentaciones y stock_actual asociados a los productos obtenidos
     const prodIds = productosRows.map(p => p.id)
+    const branchId = request.user?.branch_id
     let presentacionesRows = []
+    let stockActualRows = []
     if (prodIds.length > 0) {
       const { inArray } = require('drizzle-orm')
       presentacionesRows = await db
         .select()
         .from(schema.presentaciones)
         .where(inArray(schema.presentaciones.producto_uuid, prodIds))
+
+      const stockConds = [inArray(schema.stock_actual.producto_id, prodIds)]
+      if (branchId) {
+        stockConds.push(eq(schema.stock_actual.branch_id, branchId))
+      }
+      stockActualRows = await db
+        .select()
+        .from(schema.stock_actual)
+        .where(and(...stockConds))
     }
 
+    // Mapear stock_actual por presentación y acumulado por producto (unidades directas, soporta negativos)
+    const stockPorPres = {}
+    const stockPorProd = {}
+    stockActualRows.forEach(s => {
+      const saldo = Number(s.saldo_actual || 0)
+      if (s.presentacion_id) {
+        stockPorPres[s.presentacion_id] = (stockPorPres[s.presentacion_id] || 0) + saldo
+      }
+      if (s.producto_id) {
+        stockPorProd[s.producto_id] = (stockPorProd[s.producto_id] || 0) + saldo
+      }
+    })
+
     // Mapear presentaciones por producto convirtiendo de entero (BD) a decimal visual
+    // El stock de cada presentación se calcula a partir del stock base total del producto dividido por su multiplica_por
     const presMap = {}
     presentacionesRows.forEach(pres => {
       if (!presMap[pres.producto_uuid]) presMap[pres.producto_uuid] = []
+      const multiplicaPor = Math.max(1, Number(pres.multiplica_por || 1))
+      const saldoBaseTotal = Number(stockPorProd[pres.producto_uuid] || 0)
+      const calcStockPres = Math.trunc(saldoBaseTotal / multiplicaPor)
+      const stockPres = Object.is(calcStockPres, -0) ? 0 : calcStockPres
+
       presMap[pres.producto_uuid].push({
         id: pres.id,
         nombre: pres.nombre,
         cod_barra: pres.cod_barra,
-        multiplica_por: Number(pres.multiplica_por || 1),
+        multiplica_por: multiplicaPor,
+        stock_actual: stockPres,
+        stock_base_producto: saldoBaseTotal,
         // Conversión con factor de precio (céntimos -> decimal)
         precio_costo: Number(pres.precio_costo || 0) / factorPrecio,
         precio_venta: Number(pres.precio_venta || 0) / factorPrecio,
@@ -125,9 +157,11 @@ async function productosRoutes(fastify) {
     const data = productosRows.map(p => {
       const pPres = presMap[p.id] || []
       const principal = pPres[0] || null
+      const stockProducto = stockPorProd[p.id] !== undefined ? stockPorProd[p.id] : 0
       return {
         ...p,
-        // Conversión con factor de volumen si aplica en stock mínimo
+        stock_actual: stockProducto,
+        stock: stockProducto,
         stock_minimo_raw: Number(p.stock_minimo || 0),
         presentaciones: pPres,
         // Precios de la presentación por defecto para rápida referencia (decimales)
@@ -182,32 +216,61 @@ async function productosRoutes(fastify) {
       throw fastify.httpErrors.notFound(`Producto no encontrado`)
     }
 
-    // Obtener todas sus presentaciones
+    // Obtener todas sus presentaciones y su stock_actual
+    const branchId = request.user?.branch_id
     const presRows = await db
       .select()
       .from(schema.presentaciones)
       .where(eq(schema.presentaciones.producto_uuid, id))
 
-    const presentaciones = presRows.map(pres => ({
-      id: pres.id,
-      nombre: pres.nombre,
-      cod_barra: pres.cod_barra,
-      multiplica_por: Number(pres.multiplica_por || 1),
-      precio_costo: Number(pres.precio_costo || 0) / factorPrecio,
-      precio_venta: Number(pres.precio_venta || 0) / factorPrecio,
-      precio_mayor: Number(pres.precio_mayor || 0) / factorPrecio,
-      precio_especial: Number(pres.precio_especial || 0) / factorPrecio,
-      precio_otros: Number(pres.precio_otros || 0) / factorPrecio,
-      precio_costo_raw: Number(pres.precio_costo || 0),
-      precio_venta_raw: Number(pres.precio_venta || 0),
-      activo: pres.activo
-    }))
+    const stockConds = [eq(schema.stock_actual.producto_id, id)]
+    if (branchId) {
+      stockConds.push(eq(schema.stock_actual.branch_id, branchId))
+    }
+    const stockRows = await db
+      .select()
+      .from(schema.stock_actual)
+      .where(and(...stockConds))
+
+    const stockPorPres = {}
+    let stockProducto = 0
+    stockRows.forEach(s => {
+      const saldo = Number(s.saldo_actual || 0)
+      stockProducto += saldo
+      if (s.presentacion_id) {
+        stockPorPres[s.presentacion_id] = (stockPorPres[s.presentacion_id] || 0) + saldo
+      }
+    })
+
+    const presentaciones = presRows.map(pres => {
+      const multiplicaPor = Math.max(1, Number(pres.multiplica_por || 1))
+      const calcStockPres = Math.trunc(stockProducto / multiplicaPor)
+      const stockPres = Object.is(calcStockPres, -0) ? 0 : calcStockPres
+      return {
+        id: pres.id,
+        nombre: pres.nombre,
+        cod_barra: pres.cod_barra,
+        multiplica_por: multiplicaPor,
+        stock_actual: stockPres,
+        stock_base_producto: stockProducto,
+        precio_costo: Number(pres.precio_costo || 0) / factorPrecio,
+        precio_venta: Number(pres.precio_venta || 0) / factorPrecio,
+        precio_mayor: Number(pres.precio_mayor || 0) / factorPrecio,
+        precio_especial: Number(pres.precio_especial || 0) / factorPrecio,
+        precio_otros: Number(pres.precio_otros || 0) / factorPrecio,
+        precio_costo_raw: Number(pres.precio_costo || 0),
+        precio_venta_raw: Number(pres.precio_venta || 0),
+        activo: pres.activo
+      }
+    })
 
     const principal = presentaciones[0] || null
 
     return reply.code(200).send({
       data: {
         ...producto,
+        stock_actual: stockProducto,
+        stock: stockProducto,
         stock_minimo_raw: Number(producto.stock_minimo || 0),
         presentaciones,
         precio_costo: principal ? principal.precio_costo : 0,
@@ -217,6 +280,47 @@ async function productosRoutes(fastify) {
       },
       factores: { factorPrecio, factorVolumen }
     })
+  })
+
+  // ── GET /api/productos/:id/kardex ───────────────────────────────────────────────
+  fastify.get('/:id/kardex', async (request, reply) => {
+    const { id } = request.params
+    const branchId = request.user?.branch_id
+
+    const conditions = [eq(schema.stock.producto_id, id)]
+    if (!request.user?.es_super_admin && branchId) {
+      conditions.push(eq(schema.stock.branch_id, branchId))
+    }
+
+    const movimientos = await db
+      .select({
+        id: schema.stock.id,
+        producto_id: schema.stock.producto_id,
+        presentacion_id: schema.stock.presentacion_id,
+        presentacion_nombre: schema.presentaciones.nombre,
+        cantidad: schema.stock.cantidad,
+        multiplica_por: schema.stock.multiplica_por,
+        cantidad_base: schema.stock.cantidad_base,
+        saldo: schema.stock.saldo,
+        documento_id: schema.stock.documento_id,
+        documento: schema.stock.documento,
+        tipo_mov: schema.stock.tipo_mov,
+        concepto: schema.stock.concepto,
+        usuario_id: schema.stock.usuario_id,
+        usuario_nombre: schema.usuarios.nombre,
+        branch_id: schema.stock.branch_id,
+        almacen_id: schema.stock.almacen_id,
+        almacen_nombre: schema.almacenes.nombre,
+        created_at: schema.stock.created_at
+      })
+      .from(schema.stock)
+      .leftJoin(schema.presentaciones, eq(schema.stock.presentacion_id, schema.presentaciones.id))
+      .leftJoin(schema.usuarios, eq(schema.stock.usuario_id, schema.usuarios.id))
+      .leftJoin(schema.almacenes, eq(schema.stock.almacen_id, schema.almacenes.id))
+      .where(and(...conditions))
+      .orderBy(desc(schema.stock.created_at))
+
+    return reply.code(200).send({ success: true, data: movimientos })
   })
 
   // ── POST /api/productos ─────────────────────────────────────────────────────────

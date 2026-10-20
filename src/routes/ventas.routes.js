@@ -410,16 +410,51 @@ async function ventasRoutes(fastify) {
           })
           .returning()
 
-        // C. Insertar detalle de venta
+        const numeroComprobante = `${serieAsignada}-${String(correlativoAsignado).padStart(8, '0')}`
+
+        // Resolver almacén principal de la sucursal (o crearlo si aún no existe)
+        let [almacen] = await tx
+          .select({ id: schema.almacenes.id })
+          .from(schema.almacenes)
+          .where(and(eq(schema.almacenes.branch_id, branchId), eq(schema.almacenes.activo, true)))
+          .orderBy(desc(schema.almacenes.es_principal))
+          .limit(1)
+
+        if (!almacen) {
+          ;[almacen] = await tx
+            .insert(schema.almacenes)
+            .values({
+              branch_id: branchId,
+              nombre: 'ALMACÉN PRINCIPAL',
+              codigo: 'ALM-01',
+              es_principal: true,
+              activo: true
+            })
+            .returning({ id: schema.almacenes.id })
+        }
+
+        // C. Insertar detalle de venta y registrar movimiento de stock (stock_actual + kardex stock)
         for (const item of items) {
           let presId = item.presentacion_id
-          if (!presId && item.producto_id) {
+          let multiplicaPor = 1
+
+          if (presId) {
+            const [presInfo] = await tx
+              .select({ id: schema.presentaciones.id, multiplica_por: schema.presentaciones.multiplica_por })
+              .from(schema.presentaciones)
+              .where(eq(schema.presentaciones.id, presId))
+              .limit(1)
+            if (presInfo) {
+              multiplicaPor = Math.max(1, Number(presInfo.multiplica_por || 1))
+            }
+          } else if (item.producto_id) {
             const [pres] = await tx
-              .select({ id: schema.presentaciones.id })
+              .select({ id: schema.presentaciones.id, multiplica_por: schema.presentaciones.multiplica_por })
               .from(schema.presentaciones)
               .where(eq(schema.presentaciones.producto_uuid, item.producto_id))
               .limit(1)
             presId = pres?.id || null
+            multiplicaPor = Math.max(1, Number(pres?.multiplica_por || 1))
           }
 
           if (!presId) {
@@ -428,13 +463,16 @@ async function ventasRoutes(fastify) {
               .values({
                 producto_uuid: item.producto_id,
                 nombre: item.nombre || item.nombre_completo || 'UNIDAD',
+                multiplica_por: 1,
                 precio_venta: Math.round(Number(item.precio_unitario || 0) * factorPrecio)
               })
               .returning()
             presId = nuevaPres.id
+            multiplicaPor = 1
           }
 
           const cant = Math.round(Number(item.cantidad || 1))
+          const cantidadBase = cant * multiplicaPor
           const precioVisual = Number(item.precio_unitario || 0)
           const precioInt = Math.round(precioVisual * factorPrecio)
           const itemTotalVisual = Number((cant * precioVisual).toFixed(2))
@@ -456,29 +494,68 @@ async function ventasRoutes(fastify) {
             total: itemTotalInt
           })
 
-          // D. Descontar Stock si existe almacén asignado a la sucursal
-          const [almacen] = await tx
-            .select({ id: schema.almacenes.id })
-            .from(schema.almacenes)
-            .where(eq(schema.almacenes.branch_id, branchId))
-            .limit(1)
-
+          // D. Actualizar stock_actual (permitiendo stock negativo) e insertar Kárdex en tabla stock
           if (almacen && item.producto_id && presId) {
-            // Descuento atómico directo en BD: previene condiciones de carrera en inventario
-            await tx
-              .update(schema.stock_actual)
-              .set({
-                saldo_actual: sql`GREATEST(0, COALESCE(${schema.stock_actual.saldo_actual}, 0) - ${cant})`,
-                updated_at: sql`NOW()`
-              })
+            const stockProductoRows = await tx
+              .select()
+              .from(schema.stock_actual)
               .where(
                 and(
                   eq(schema.stock_actual.branch_id, branchId),
                   eq(schema.stock_actual.almacen_id, almacen.id),
-                  eq(schema.stock_actual.producto_id, item.producto_id),
-                  eq(schema.stock_actual.presentacion_id, presId)
+                  eq(schema.stock_actual.producto_id, item.producto_id)
                 )
               )
+              .for('update')
+
+            const saldoBaseAnterior = stockProductoRows.reduce(
+              (acc, r) => acc + Number(r.saldo_actual || 0),
+              0
+            )
+            const stockExistente = stockProductoRows.find(
+              (r) => r.presentacion_id === presId
+            )
+
+            const nuevoSaldoBaseTotal = saldoBaseAnterior - cantidadBase
+
+            if (stockExistente) {
+              const nuevoSaldoFila = Number(stockExistente.saldo_actual || 0) - cantidadBase
+              await tx
+                .update(schema.stock_actual)
+                .set({
+                  saldo_actual: nuevoSaldoFila,
+                  updated_at: sql`NOW()`
+                })
+                .where(eq(schema.stock_actual.id, stockExistente.id))
+            } else {
+              await tx.insert(schema.stock_actual).values({
+                branch_id: branchId,
+                almacen_id: almacen.id,
+                producto_id: item.producto_id,
+                presentacion_id: presId,
+                lotes_id: null,
+                saldo_actual: 0 - cantidadBase,
+                updated_at: sql`NOW()`
+              })
+            }
+
+            // Registrar movimiento histórico (Kárdex) en tabla stock (tipo_mov: 2 = Salida)
+            await tx.insert(schema.stock).values({
+              producto_id: item.producto_id,
+              presentacion_id: presId,
+              lotes_id: null,
+              cantidad: cant,
+              multiplica_por: multiplicaPor,
+              cantidad_base: cantidadBase,
+              saldo: nuevoSaldoBaseTotal,
+              documento_id: nuevaVenta.id,
+              documento: numeroComprobante,
+              tipo_mov: 2,
+              concepto: `VENTA - ${numeroComprobante}`,
+              usuario_id: usuarioId,
+              branch_id: branchId,
+              almacen_id: almacen.id
+            })
           }
         }
 
@@ -542,14 +619,117 @@ async function ventasRoutes(fastify) {
         return reply.code(404).send({ success: false, message: 'Venta no encontrada' })
       }
 
-      await db
-        .update(schema.ventas)
-        .set({
-          estado: 'ANULADO',
-          observacion_venta: motivo ? `ANULADO: ${motivo}` : 'ANULADO',
-          updated_at: sql`NOW()`
-        })
-        .where(eq(schema.ventas.id, id))
+      const estActual = String(venta.estado || '').toUpperCase()
+      if (estActual === 'ANULADO' || estActual === 'ANULADA') {
+        return reply.code(400).send({ success: false, message: 'El comprobante ya se encuentra anulado' })
+      }
+
+      const numeroComprobante = `${venta.serie || 'S/N'}-${String(venta.correlativo || 0).padStart(8, '0')}`
+      const usuarioId = request.user?.id || venta.usuario_id
+
+      await db.transaction(async (tx) => {
+        // 1. Marcar venta como ANULADO
+        await tx
+          .update(schema.ventas)
+          .set({
+            estado: 'ANULADO',
+            observacion_venta: motivo ? `ANULADO: ${motivo}` : 'ANULADO',
+            updated_at: sql`NOW()`
+          })
+          .where(eq(schema.ventas.id, id))
+
+        // 2. Obtener almacén de la sucursal de la venta
+        const [almacen] = await tx
+          .select({ id: schema.almacenes.id })
+          .from(schema.almacenes)
+          .where(eq(schema.almacenes.branch_id, venta.branch_id))
+          .orderBy(desc(schema.almacenes.es_principal))
+          .limit(1)
+
+        // 3. Revertir stock de los ítems vendidos (tipo_mov: 1 = Entrada por anulación)
+        if (almacen) {
+          const detalles = await tx
+            .select()
+            .from(schema.detalle_ventas)
+            .where(eq(schema.detalle_ventas.venta_id, id))
+
+          for (const det of detalles) {
+            if (!det.producto_id || !det.presentacion_id) continue
+
+            const [pres] = await tx
+              .select({ multiplica_por: schema.presentaciones.multiplica_por })
+              .from(schema.presentaciones)
+              .where(eq(schema.presentaciones.id, det.presentacion_id))
+              .limit(1)
+
+            const multiplicaPor = Math.max(1, Number(pres?.multiplica_por || 1))
+            const cant = Math.round(Number(det.cantidad || 0))
+            const cantidadBase = cant * multiplicaPor
+
+            const stockProductoRows = await tx
+              .select()
+              .from(schema.stock_actual)
+              .where(
+                and(
+                  eq(schema.stock_actual.branch_id, venta.branch_id),
+                  eq(schema.stock_actual.almacen_id, almacen.id),
+                  eq(schema.stock_actual.producto_id, det.producto_id)
+                )
+              )
+              .for('update')
+
+            const saldoBaseAnterior = stockProductoRows.reduce(
+              (acc, r) => acc + Number(r.saldo_actual || 0),
+              0
+            )
+            const stockExistente = stockProductoRows.find(
+              (r) => r.presentacion_id === det.presentacion_id
+            )
+
+            const nuevoSaldoBaseTotal = saldoBaseAnterior + cantidadBase
+
+            if (stockExistente) {
+              const nuevoSaldoFila = Number(stockExistente.saldo_actual || 0) + cantidadBase
+              await tx
+                .update(schema.stock_actual)
+                .set({
+                  saldo_actual: nuevoSaldoFila,
+                  updated_at: sql`NOW()`
+                })
+                .where(eq(schema.stock_actual.id, stockExistente.id))
+            } else {
+              await tx.insert(schema.stock_actual).values({
+                branch_id: venta.branch_id,
+                almacen_id: almacen.id,
+                producto_id: det.producto_id,
+                presentacion_id: det.presentacion_id,
+                lotes_id: null,
+                saldo_actual: cantidadBase,
+                updated_at: sql`NOW()`
+              })
+            }
+
+            await tx.insert(schema.stock).values({
+              producto_id: det.producto_id,
+              presentacion_id: det.presentacion_id,
+              lotes_id: null,
+              cantidad: cant,
+              multiplica_por: multiplicaPor,
+              cantidad_base: cantidadBase,
+              saldo: nuevoSaldoBaseTotal,
+              documento_id: venta.id,
+              documento: numeroComprobante,
+              tipo_mov: 1,
+              concepto: motivo
+                ? `ANULACIÓN VENTA - ${numeroComprobante} (${motivo})`
+                : `ANULACIÓN VENTA - ${numeroComprobante}`,
+              usuario_id: usuarioId,
+              branch_id: venta.branch_id,
+              almacen_id: almacen.id
+            })
+          }
+        }
+      })
 
       return reply.code(200).send({
         success: true,

@@ -90,10 +90,15 @@ async function authPlugin(fastify) {
       requiredPermission = `${resource}.${action}`
     }
 
-    // 5. Validar en Memoria O(1) extraído del JWT
+    // 5. Validar en Memoria O(1) extraído del JWT (soporta string o array de permisos alternativos)
     const { permisos } = request.user
-    if (!permisos || !permisos.includes(requiredPermission)) {
-      return reply.code(403).send({ message: `Acceso denegado. Se requiere el permiso: ${requiredPermission}` })
+    const requiredList = Array.isArray(requiredPermission) ? requiredPermission : [requiredPermission]
+    const tienePermiso = Array.isArray(permisos) && requiredList.some((p) => permisos.includes(p))
+
+    if (!tienePermiso) {
+      return reply.code(403).send({
+        message: `Acceso denegado. Se requiere el permiso: ${requiredList.join(' o ')}`
+      })
     }
   })
 }
