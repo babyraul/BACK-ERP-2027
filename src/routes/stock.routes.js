@@ -3,7 +3,13 @@
 const { db } = require('../db')
 const schema = require('../db/schema')
 const { eq, and, or, ilike, desc, inArray, sql } = require('drizzle-orm')
-const { getFactores } = require('../utils/factores')
+const {
+  getFactores,
+  toVolumenInt,
+  normalizeVolumenInt,
+  toVolumenVisual,
+  calcularStockPresentacion
+} = require('../utils/factores')
 
 /**
  * Rutas para el Módulo de Control de Stock Actual y Kárdex Histórico
@@ -86,7 +92,7 @@ async function stockRoutes(fastify) {
         .where(and(...prodConds))
         .orderBy(desc(schema.productos.created_at))
 
-      const { factorPrecio } = await getFactores()
+      const { factorPrecio, factorVolumen } = await getFactores()
       const prodIds = productosRows.map((p) => p.id)
 
       let presentacionesRows = []
@@ -130,12 +136,12 @@ async function stockRoutes(fastify) {
         presPorProducto[pres.producto_uuid].push(pres)
       })
 
-      // Indexar stock_actual por clave compuesta `${producto_id}_${presentacion_id}`
+      // Indexar stock_actual por clave compuesta `${producto_id}_${presentacion_id}` (convertido por factorVolumen)
       const stockMap = {}
       const stockProdTotalMap = {}
       stockActualRows.forEach((row) => {
         const key = `${row.producto_id}_${row.presentacion_id}`
-        const saldo = Number(row.saldo_actual || 0)
+        const saldo = toVolumenVisual(row.saldo_actual, factorVolumen)
         if (!stockMap[key]) {
           stockMap[key] = {
             stock_actual_id: row.id,
@@ -145,12 +151,12 @@ async function stockRoutes(fastify) {
             updated_at: row.updated_at
           }
         } else {
-          stockMap[key].saldo_actual += saldo
+          stockMap[key].saldo_actual = Number((stockMap[key].saldo_actual + saldo).toFixed(4))
           if (row.updated_at && (!stockMap[key].updated_at || row.updated_at > stockMap[key].updated_at)) {
             stockMap[key].updated_at = row.updated_at
           }
         }
-        stockProdTotalMap[row.producto_id] = (stockProdTotalMap[row.producto_id] || 0) + saldo
+        stockProdTotalMap[row.producto_id] = Number(((stockProdTotalMap[row.producto_id] || 0) + saldo).toFixed(4))
       })
 
       // Construir filas de productos con sus presentaciones desde stock_actual
@@ -164,9 +170,8 @@ async function stockRoutes(fastify) {
             const key = `${prod.id}_${pres.id}`
             const stockInfo = stockMap[key]
             const multiplicaPor = Math.max(1, Number(pres.multiplica_por || 1))
-            // El stock de cada presentación es el stock base total del producto dividido entre su factor multiplica_por
-            const calcSaldoPres = Math.trunc(stockTotalProducto / multiplicaPor)
-            const saldoActual = Object.is(calcSaldoPres, -0) ? 0 : calcSaldoPres
+            // El stock de cada presentación se calcula a partir del stock base total del producto y su multiplica_por
+            const saldoActual = calcularStockPresentacion(stockTotalProducto, multiplicaPor)
             const stockMinimo = Number(prod.stock_minimo || 0)
 
             items.push({
@@ -318,7 +323,9 @@ async function stockRoutes(fastify) {
           conditions.push(sql`DATE(${schema.stock.created_at}) <= ${fecha_fin}::date`)
         }
 
-        const movimientos = await db
+        const { factorVolumen } = await getFactores()
+
+        const rawMovimientos = await db
           .select({
             id: schema.stock.id,
             producto_id: schema.stock.producto_id,
@@ -350,6 +357,13 @@ async function stockRoutes(fastify) {
           .where(and(...conditions))
           .orderBy(desc(schema.stock.created_at))
 
+        const movimientos = rawMovimientos.map((m) => ({
+          ...m,
+          cantidad: toVolumenVisual(m.cantidad, factorVolumen),
+          cantidad_base: toVolumenVisual(m.cantidad_base, factorVolumen),
+          saldo: toVolumenVisual(m.saldo, factorVolumen)
+        }))
+
         // Consultar saldo base total vigente del producto en stock_actual
         const saConds = [eq(schema.stock_actual.producto_id, producto_id)]
         if (!request.user?.es_super_admin && branchId) {
@@ -364,7 +378,11 @@ async function stockRoutes(fastify) {
           .from(schema.stock_actual)
           .where(and(...saConds))
 
-        const saldoBaseProducto = saRows.reduce((acc, r) => acc + Number(r.saldo_actual || 0), 0)
+        const saldoBaseProducto = Number(
+          saRows
+            .reduce((acc, r) => acc + toVolumenVisual(r.saldo_actual, factorVolumen), 0)
+            .toFixed(4)
+        )
 
         let multiplicaPorFiltro = 1
         if (presentacion_id) {
@@ -376,17 +394,16 @@ async function stockRoutes(fastify) {
           multiplicaPorFiltro = Math.max(1, Number(presRow?.multiplica_por || 1))
         }
 
-        const calcSaldoPres = Math.trunc(saldoBaseProducto / multiplicaPorFiltro)
-        const saldoActual = Object.is(calcSaldoPres, -0) ? 0 : calcSaldoPres
+        const saldoActual = calcularStockPresentacion(saldoBaseProducto, multiplicaPorFiltro)
 
         let totalEntradas = 0
         let totalSalidas = 0
         movimientos.forEach((m) => {
           const cb = Number(m.cantidad_base || m.cantidad || 0)
           if (Number(m.tipo_mov) === 1) {
-            totalEntradas += cb
+            totalEntradas = Number((totalEntradas + cb).toFixed(4))
           } else {
-            totalSalidas += cb
+            totalSalidas = Number((totalSalidas + cb).toFixed(4))
           }
         })
 
@@ -450,13 +467,15 @@ async function stockRoutes(fastify) {
         }
 
         const tipoMovNum = Number(tipo_mov) === 2 ? 2 : 1
-        const cantNum = Math.round(Number(cantidad || 0))
-        if (cantNum <= 0) {
+        const cantVisual = Number(cantidad || 0)
+        if (!Number.isFinite(cantVisual) || cantVisual <= 0) {
           return reply.code(400).send({
             success: false,
             message: 'La cantidad del movimiento debe ser mayor a 0.'
           })
         }
+
+        const { factorVolumen } = await getFactores()
 
         const resultado = await db.transaction(async (tx) => {
           // 1. Resolver almacén de la sucursal
@@ -494,7 +513,8 @@ async function stockRoutes(fastify) {
             .limit(1)
 
           const multiplicaPor = Math.max(1, Number(pres?.multiplica_por || 1))
-          const cantidadBase = cantNum * multiplicaPor
+          const cantInt = toVolumenInt(cantVisual, factorVolumen)
+          const cantidadBaseInt = toVolumenInt(cantVisual * multiplicaPor, factorVolumen)
 
           // 3. Bloquear filas del producto en stock_actual y calcular saldo base unificado
           const stockProductoRows = await tx
@@ -509,23 +529,24 @@ async function stockRoutes(fastify) {
             )
             .for('update')
 
-          const saldoBaseAnterior = stockProductoRows.reduce(
-            (acc, r) => acc + Number(r.saldo_actual || 0),
+          const saldoBaseAnteriorInt = stockProductoRows.reduce(
+            (acc, r) => acc + normalizeVolumenInt(r.saldo_actual, factorVolumen),
             0
           )
           const stockExistente = stockProductoRows.find(
             (r) => r.presentacion_id === presentacion_id
           )
 
-          const delta = tipoMovNum === 1 ? cantidadBase : -cantidadBase
-          const nuevoSaldoBaseTotal = saldoBaseAnterior + delta
+          const deltaInt = tipoMovNum === 1 ? cantidadBaseInt : -cantidadBaseInt
+          const nuevoSaldoBaseTotalInt = saldoBaseAnteriorInt + deltaInt
 
           if (stockExistente) {
-            const nuevoSaldoFila = Number(stockExistente.saldo_actual || 0) + delta
+            const saldoFilaActualInt = normalizeVolumenInt(stockExistente.saldo_actual, factorVolumen)
+            const nuevoSaldoFilaInt = saldoFilaActualInt + deltaInt
             await tx
               .update(schema.stock_actual)
               .set({
-                saldo_actual: nuevoSaldoFila,
+                saldo_actual: nuevoSaldoFilaInt,
                 updated_at: sql`NOW()`
               })
               .where(eq(schema.stock_actual.id, stockExistente.id))
@@ -536,7 +557,7 @@ async function stockRoutes(fastify) {
               producto_id: producto_id,
               presentacion_id: presentacion_id,
               lotes_id: null,
-              saldo_actual: delta,
+              saldo_actual: deltaInt,
               updated_at: sql`NOW()`
             })
           }
@@ -553,10 +574,10 @@ async function stockRoutes(fastify) {
               producto_id,
               presentacion_id,
               lotes_id: null,
-              cantidad: cantNum,
+              cantidad: cantInt,
               multiplica_por: multiplicaPor,
-              cantidad_base: cantidadBase,
-              saldo: nuevoSaldoBaseTotal,
+              cantidad_base: cantidadBaseInt,
+              saldo: nuevoSaldoBaseTotalInt,
               documento_id: null,
               documento: docRef,
               tipo_mov: tipoMovNum,
@@ -568,8 +589,13 @@ async function stockRoutes(fastify) {
             .returning()
 
           return {
-            movimiento,
-            saldo_actual: nuevoSaldoBaseTotal
+            movimiento: {
+              ...movimiento,
+              cantidad: toVolumenVisual(movimiento.cantidad, factorVolumen),
+              cantidad_base: toVolumenVisual(movimiento.cantidad_base, factorVolumen),
+              saldo: toVolumenVisual(movimiento.saldo, factorVolumen)
+            },
+            saldo_actual: toVolumenVisual(nuevoSaldoBaseTotalInt, factorVolumen)
           }
         })
 

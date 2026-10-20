@@ -84,6 +84,60 @@ function toVolumenInt(visualVol, factor = 1000000) {
 }
 
 /**
+ * Normaliza un valor entero de volumen/cantidad proveniente de la BD.
+ * Si proviene de registros previos no escalados (|valor| > 0 y < 1000 con factor >= 10000),
+ * lo escala automáticamente por el factorVolumen para mantener consistencia aritmética.
+ *
+ * @param {number|string} rawVal - Valor almacenado en columna bigint
+ * @param {number} factor - Factor de volumen (por defecto 1000000)
+ * @returns {number} Entero escalado por factorVolumen
+ */
+function normalizeVolumenInt(rawVal, factor = 1000000) {
+  const num = Number(rawVal || 0)
+  if (!Number.isFinite(num) || num === 0) return 0
+  if (factor >= 10000 && Math.abs(num) < 1000) {
+    return Math.round(num * factor)
+  }
+  return Math.round(num)
+}
+
+/**
+ * Convierte un entero de volumen almacenado en bigint a cantidad decimal visual
+ * Ej: 1500000 -> 1.5
+ *
+ * @param {number|string} intVol - Cantidad entera en BD
+ * @param {number} factor - Factor de volumen (por defecto 1000000)
+ * @param {number} decimals - Máximo de decimales (default: 4)
+ * @returns {number} Cantidad decimal visual (ej. 1.5, -7, 2)
+ */
+function toVolumenVisual(intVol, factor = 1000000, decimals = 4) {
+  const normalized = normalizeVolumenInt(intVol, factor)
+  if (normalized === 0) return 0
+  const val = Number((normalized / factor).toFixed(decimals))
+  return Object.is(val, -0) ? 0 : val
+}
+
+/**
+ * Calcula el stock disponible para una presentación a partir del saldo base visual del producto.
+ * - Si multiplica_por === 1 (unidad base, ej. NIU, KGM, LTR), preserva los decimales (ej. -1.5 kg).
+ * - Si multiplica_por > 1 (empaque mayor, ej. DOCENA x6, CAJA x12), trunca a unidades completas de esa presentación.
+ *
+ * @param {number} saldoBaseVisual - Stock base total del producto en unidades visuales
+ * @param {number} multiplicaPor - Factor multiplica_por de la presentación
+ * @returns {number} Stock de la presentación
+ */
+function calcularStockPresentacion(saldoBaseVisual, multiplicaPor = 1) {
+  const base = Number(saldoBaseVisual || 0)
+  const mult = Math.max(1, Number(multiplicaPor || 1))
+  if (mult > 1) {
+    const calc = Math.trunc(base / mult)
+    return Object.is(calc, -0) ? 0 : calc
+  }
+  const calc = Number(base.toFixed(4))
+  return Object.is(calc, -0) ? 0 : calc
+}
+
+/**
  * Invalida la caché de factores manualmente (ej: tras actualizar tipo_factores)
  */
 function invalidarCacheFactores() {
@@ -96,5 +150,8 @@ module.exports = {
   toPrecioInt,
   toPrecioVisual,
   toVolumenInt,
+  normalizeVolumenInt,
+  toVolumenVisual,
+  calcularStockPresentacion,
   invalidarCacheFactores
 }

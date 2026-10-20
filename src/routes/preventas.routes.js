@@ -3,7 +3,7 @@
 const { db } = require('../db')
 const schema = require('../db/schema')
 const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
-const { getFactores, toPrecioInt } = require('../utils/factores')
+const { getFactores, toPrecioInt, toVolumenInt, toVolumenVisual } = require('../utils/factores')
 
 /**
  * Rutas para Pre-Ventas (pedidos / reservas antes del pago)
@@ -109,7 +109,7 @@ async function preventasRoutes(fastify) {
   fastify.get('/:id', auth, async (request, reply) => {
     try {
       const { id } = request.params
-      const { factorPrecio } = await getFactores()
+      const { factorPrecio, factorVolumen } = await getFactores()
 
       const [preventa] = await db
         .select({
@@ -150,12 +150,13 @@ async function preventasRoutes(fastify) {
       }
 
       // Obtener detalle de ítems
-      const items = await db
+      const rawItems = await db
         .select({
           id: schema.detalle_pre_ventas.id,
           preventa_id: schema.detalle_pre_ventas.preventa_id,
           producto_id: schema.detalle_pre_ventas.producto_id,
           producto_nombre: schema.productos.nombre,
+          unidad_medida_id: schema.productos.unidad_medida_id,
           nombre_completo: schema.presentaciones.nombre,
           presentacion_id: schema.detalle_pre_ventas.presentacion_id,
           cantidad: schema.detalle_pre_ventas.cantidad,
@@ -168,6 +169,12 @@ async function preventasRoutes(fastify) {
         .leftJoin(schema.productos, eq(schema.detalle_pre_ventas.producto_id, schema.productos.id))
         .leftJoin(schema.presentaciones, eq(schema.detalle_pre_ventas.presentacion_id, schema.presentaciones.id))
         .where(eq(schema.detalle_pre_ventas.preventa_id, id))
+
+      const items = rawItems.map((it) => ({
+        ...it,
+        cantidad: toVolumenVisual(it.cantidad, factorVolumen),
+        cantidad_raw: Number(it.cantidad || 0)
+      }))
 
       return reply.code(200).send({
         success: true,
@@ -221,7 +228,7 @@ async function preventasRoutes(fastify) {
       const isUUID = (str) =>
         Boolean(str && typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str))
 
-      const { factorPrecio } = await getFactores()
+      const { factorPrecio, factorVolumen } = await getFactores()
 
       // Convertir a enteros para almacenamiento en campos bigint
       const totalVisual = Number(total || 0)
@@ -280,10 +287,11 @@ async function preventasRoutes(fastify) {
             presId = nuevaPres.id
           }
 
-          const cant = Math.round(Number(item.cantidad || 1))
+          const cantVisual = Number(item.cantidad || 1)
+          const cantInt = toVolumenInt(cantVisual, factorVolumen)
           const precioVisual = Number(item.precio_unitario || item.precio || 0)
           const precioInt = Math.round(precioVisual * factorPrecio)
-          const itemTotalVisual = Number((cant * precioVisual).toFixed(2))
+          const itemTotalVisual = Number((cantVisual * precioVisual).toFixed(2))
           const itemSubtotalVisual = Number((itemTotalVisual / 1.18).toFixed(2))
           const itemIgvVisual = Number((itemTotalVisual - itemSubtotalVisual).toFixed(2))
 
@@ -295,7 +303,7 @@ async function preventasRoutes(fastify) {
             preventa_id: nuevaPreventa.id,
             producto_id: item.producto_id,
             presentacion_id: presId,
-            cantidad: cant,
+            cantidad: cantInt,
             precio_unitario: precioInt,
             subtotal: itemSubtotalInt,
             igv: itemIgvInt,
@@ -355,7 +363,7 @@ async function preventasRoutes(fastify) {
       const isUUID = (str) =>
         Boolean(str && typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str))
 
-      const { factorPrecio } = await getFactores()
+      const { factorPrecio, factorVolumen } = await getFactores()
 
       const totalVisual = Number(total || 0)
       const gravadoVisual = Number(gravado || (totalVisual / 1.18).toFixed(2))
@@ -414,10 +422,11 @@ async function preventasRoutes(fastify) {
               presId = nuevaPres.id
             }
 
-            const cant = Math.max(1, Math.round(Number(item.cantidad || 1)))
+            const cantVisual = Math.max(0.0001, Number(item.cantidad || 1))
+            const cantInt = toVolumenInt(cantVisual, factorVolumen)
             const precioVisual = Number(item.precio_unitario || item.precio || 0)
             const precioInt = Math.round(precioVisual * factorPrecio)
-            const itemTotalVisual = Number((cant * precioVisual).toFixed(2))
+            const itemTotalVisual = Number((cantVisual * precioVisual).toFixed(2))
             const itemSubtotalVisual = Number((itemTotalVisual / 1.18).toFixed(2))
             const itemIgvVisual = Number((itemTotalVisual - itemSubtotalVisual).toFixed(2))
 
@@ -429,7 +438,7 @@ async function preventasRoutes(fastify) {
               preventa_id: id,
               producto_id: prodId,
               presentacion_id: presId,
-              cantidad: cant,
+              cantidad: cantInt,
               precio_unitario: precioInt,
               subtotal: itemSubtotalInt,
               igv: itemIgvInt,

@@ -3,7 +3,13 @@
 const { db } = require('../db')
 const schema = require('../db/schema')
 const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
-const { getFactores, toPrecioInt, toPrecioVisual } = require('../utils/factores')
+const {
+  getFactores,
+  toPrecioInt,
+  toPrecioVisual,
+  toVolumenVisual,
+  calcularStockPresentacion
+} = require('../utils/factores')
 
 /**
  * Rutas CRUD de Productos con Drizzle ORM
@@ -111,16 +117,16 @@ async function productosRoutes(fastify) {
         .where(and(...stockConds))
     }
 
-    // Mapear stock_actual por presentación y acumulado por producto (unidades directas, soporta negativos)
+    // Mapear stock_actual por presentación y acumulado por producto (convertido por factorVolumen, soporta decimales y negativos)
     const stockPorPres = {}
     const stockPorProd = {}
     stockActualRows.forEach(s => {
-      const saldo = Number(s.saldo_actual || 0)
+      const saldo = toVolumenVisual(s.saldo_actual, factorVolumen)
       if (s.presentacion_id) {
-        stockPorPres[s.presentacion_id] = (stockPorPres[s.presentacion_id] || 0) + saldo
+        stockPorPres[s.presentacion_id] = Number(((stockPorPres[s.presentacion_id] || 0) + saldo).toFixed(4))
       }
       if (s.producto_id) {
-        stockPorProd[s.producto_id] = (stockPorProd[s.producto_id] || 0) + saldo
+        stockPorProd[s.producto_id] = Number(((stockPorProd[s.producto_id] || 0) + saldo).toFixed(4))
       }
     })
 
@@ -131,8 +137,7 @@ async function productosRoutes(fastify) {
       if (!presMap[pres.producto_uuid]) presMap[pres.producto_uuid] = []
       const multiplicaPor = Math.max(1, Number(pres.multiplica_por || 1))
       const saldoBaseTotal = Number(stockPorProd[pres.producto_uuid] || 0)
-      const calcStockPres = Math.trunc(saldoBaseTotal / multiplicaPor)
-      const stockPres = Object.is(calcStockPres, -0) ? 0 : calcStockPres
+      const stockPres = calcularStockPresentacion(saldoBaseTotal, multiplicaPor)
 
       presMap[pres.producto_uuid].push({
         id: pres.id,
@@ -235,17 +240,16 @@ async function productosRoutes(fastify) {
     const stockPorPres = {}
     let stockProducto = 0
     stockRows.forEach(s => {
-      const saldo = Number(s.saldo_actual || 0)
-      stockProducto += saldo
+      const saldo = toVolumenVisual(s.saldo_actual, factorVolumen)
+      stockProducto = Number((stockProducto + saldo).toFixed(4))
       if (s.presentacion_id) {
-        stockPorPres[s.presentacion_id] = (stockPorPres[s.presentacion_id] || 0) + saldo
+        stockPorPres[s.presentacion_id] = Number(((stockPorPres[s.presentacion_id] || 0) + saldo).toFixed(4))
       }
     })
 
     const presentaciones = presRows.map(pres => {
       const multiplicaPor = Math.max(1, Number(pres.multiplica_por || 1))
-      const calcStockPres = Math.trunc(stockProducto / multiplicaPor)
-      const stockPres = Object.is(calcStockPres, -0) ? 0 : calcStockPres
+      const stockPres = calcularStockPresentacion(stockProducto, multiplicaPor)
       return {
         id: pres.id,
         nombre: pres.nombre,
@@ -286,13 +290,14 @@ async function productosRoutes(fastify) {
   fastify.get('/:id/kardex', async (request, reply) => {
     const { id } = request.params
     const branchId = request.user?.branch_id
+    const { factorVolumen } = await getFactores()
 
     const conditions = [eq(schema.stock.producto_id, id)]
     if (!request.user?.es_super_admin && branchId) {
       conditions.push(eq(schema.stock.branch_id, branchId))
     }
 
-    const movimientos = await db
+    const rawMovimientos = await db
       .select({
         id: schema.stock.id,
         producto_id: schema.stock.producto_id,
@@ -319,6 +324,13 @@ async function productosRoutes(fastify) {
       .leftJoin(schema.almacenes, eq(schema.stock.almacen_id, schema.almacenes.id))
       .where(and(...conditions))
       .orderBy(desc(schema.stock.created_at))
+
+    const movimientos = rawMovimientos.map((m) => ({
+      ...m,
+      cantidad: toVolumenVisual(m.cantidad, factorVolumen),
+      cantidad_base: toVolumenVisual(m.cantidad_base, factorVolumen),
+      saldo: toVolumenVisual(m.saldo, factorVolumen)
+    }))
 
     return reply.code(200).send({ success: true, data: movimientos })
   })

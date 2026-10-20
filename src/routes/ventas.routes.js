@@ -3,7 +3,13 @@
 const { db } = require('../db')
 const schema = require('../db/schema')
 const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
-const { getFactores, toPrecioInt } = require('../utils/factores')
+const {
+  getFactores,
+  toPrecioInt,
+  toVolumenInt,
+  normalizeVolumenInt,
+  toVolumenVisual
+} = require('../utils/factores')
 
 /**
  * Rutas Transaccionales para Ventas Finales y Facturación
@@ -135,7 +141,7 @@ async function ventasRoutes(fastify) {
   fastify.get('/:id', auth, async (request, reply) => {
     try {
       const { id } = request.params
-      const { factorPrecio } = await getFactores()
+      const { factorPrecio, factorVolumen } = await getFactores()
 
       const [venta] = await db
         .select({
@@ -182,12 +188,14 @@ async function ventasRoutes(fastify) {
       }
 
       // Detalle de ítems
-      const items = await db
+      const rawItems = await db
         .select({
           id: schema.detalle_ventas.id,
           producto_id: schema.detalle_ventas.producto_id,
           producto_nombre: schema.productos.nombre,
+          unidad_medida_id: schema.productos.unidad_medida_id,
           presentacion_id: schema.detalle_ventas.presentacion_id,
+          presentacion_nombre: schema.presentaciones.nombre,
           cantidad: schema.detalle_ventas.cantidad,
           precio_unitario: sql`ROUND(CAST(${schema.detalle_ventas.precio_unitario} AS numeric) / ${factorPrecio}, 2)`,
           subtotal: sql`ROUND(CAST(${schema.detalle_ventas.subtotal} AS numeric) / ${factorPrecio}, 2)`,
@@ -196,7 +204,14 @@ async function ventasRoutes(fastify) {
         })
         .from(schema.detalle_ventas)
         .leftJoin(schema.productos, eq(schema.detalle_ventas.producto_id, schema.productos.id))
+        .leftJoin(schema.presentaciones, eq(schema.detalle_ventas.presentacion_id, schema.presentaciones.id))
         .where(eq(schema.detalle_ventas.venta_id, id))
+
+      const items = rawItems.map((it) => ({
+        ...it,
+        cantidad: toVolumenVisual(it.cantidad, factorVolumen),
+        cantidad_raw: Number(it.cantidad || 0)
+      }))
 
       // Detalle de pagos asociados
       const pagos = await db
@@ -369,7 +384,7 @@ async function ventasRoutes(fastify) {
           })
           .where(eq(schema.caja_serie_correlativo.id, serieConfig.id))
 
-        const { factorPrecio } = await getFactores()
+        const { factorPrecio, factorVolumen } = await getFactores()
 
         const totalVisual = Number(total || 0)
         const gravadoVisual = Number((totalVisual / 1.18).toFixed(2))
@@ -471,11 +486,14 @@ async function ventasRoutes(fastify) {
             multiplicaPor = 1
           }
 
-          const cant = Math.round(Number(item.cantidad || 1))
-          const cantidadBase = cant * multiplicaPor
+          const cantVisual = Number(item.cantidad || 1)
+          const cantidadBaseVisual = cantVisual * multiplicaPor
+          const cantInt = toVolumenInt(cantVisual, factorVolumen)
+          const cantidadBaseInt = toVolumenInt(cantidadBaseVisual, factorVolumen)
+
           const precioVisual = Number(item.precio_unitario || 0)
           const precioInt = Math.round(precioVisual * factorPrecio)
-          const itemTotalVisual = Number((cant * precioVisual).toFixed(2))
+          const itemTotalVisual = Number((cantVisual * precioVisual).toFixed(2))
           const itemSubtotalVisual = Number((itemTotalVisual / 1.18).toFixed(2))
           const itemIgvVisual = Number((itemTotalVisual - itemSubtotalVisual).toFixed(2))
 
@@ -487,14 +505,14 @@ async function ventasRoutes(fastify) {
             venta_id: nuevaVenta.id,
             producto_id: item.producto_id,
             presentacion_id: presId,
-            cantidad: cant,
+            cantidad: cantInt,
             precio_unitario: precioInt,
             subtotal: itemSubtotalInt,
             igv: itemIgvInt,
             total: itemTotalInt
           })
 
-          // D. Actualizar stock_actual (permitiendo stock negativo) e insertar Kárdex en tabla stock
+          // D. Actualizar stock_actual (permitiendo stock negativo) e insertar Kárdex en tabla stock (escalado por factorVolumen)
           if (almacen && item.producto_id && presId) {
             const stockProductoRows = await tx
               .select()
@@ -508,22 +526,23 @@ async function ventasRoutes(fastify) {
               )
               .for('update')
 
-            const saldoBaseAnterior = stockProductoRows.reduce(
-              (acc, r) => acc + Number(r.saldo_actual || 0),
+            const saldoBaseAnteriorInt = stockProductoRows.reduce(
+              (acc, r) => acc + normalizeVolumenInt(r.saldo_actual, factorVolumen),
               0
             )
             const stockExistente = stockProductoRows.find(
               (r) => r.presentacion_id === presId
             )
 
-            const nuevoSaldoBaseTotal = saldoBaseAnterior - cantidadBase
+            const nuevoSaldoBaseTotalInt = saldoBaseAnteriorInt - cantidadBaseInt
 
             if (stockExistente) {
-              const nuevoSaldoFila = Number(stockExistente.saldo_actual || 0) - cantidadBase
+              const saldoFilaActualInt = normalizeVolumenInt(stockExistente.saldo_actual, factorVolumen)
+              const nuevoSaldoFilaInt = saldoFilaActualInt - cantidadBaseInt
               await tx
                 .update(schema.stock_actual)
                 .set({
-                  saldo_actual: nuevoSaldoFila,
+                  saldo_actual: nuevoSaldoFilaInt,
                   updated_at: sql`NOW()`
                 })
                 .where(eq(schema.stock_actual.id, stockExistente.id))
@@ -534,7 +553,7 @@ async function ventasRoutes(fastify) {
                 producto_id: item.producto_id,
                 presentacion_id: presId,
                 lotes_id: null,
-                saldo_actual: 0 - cantidadBase,
+                saldo_actual: 0 - cantidadBaseInt,
                 updated_at: sql`NOW()`
               })
             }
@@ -544,10 +563,10 @@ async function ventasRoutes(fastify) {
               producto_id: item.producto_id,
               presentacion_id: presId,
               lotes_id: null,
-              cantidad: cant,
+              cantidad: cantInt,
               multiplica_por: multiplicaPor,
-              cantidad_base: cantidadBase,
-              saldo: nuevoSaldoBaseTotal,
+              cantidad_base: cantidadBaseInt,
+              saldo: nuevoSaldoBaseTotalInt,
               documento_id: nuevaVenta.id,
               documento: numeroComprobante,
               tipo_mov: 2,
@@ -626,6 +645,7 @@ async function ventasRoutes(fastify) {
 
       const numeroComprobante = `${venta.serie || 'S/N'}-${String(venta.correlativo || 0).padStart(8, '0')}`
       const usuarioId = request.user?.id || venta.usuario_id
+      const { factorVolumen } = await getFactores()
 
       await db.transaction(async (tx) => {
         // 1. Marcar venta como ANULADO
@@ -663,8 +683,8 @@ async function ventasRoutes(fastify) {
               .limit(1)
 
             const multiplicaPor = Math.max(1, Number(pres?.multiplica_por || 1))
-            const cant = Math.round(Number(det.cantidad || 0))
-            const cantidadBase = cant * multiplicaPor
+            const cantInt = normalizeVolumenInt(det.cantidad, factorVolumen)
+            const cantidadBaseInt = cantInt * multiplicaPor
 
             const stockProductoRows = await tx
               .select()
@@ -678,22 +698,23 @@ async function ventasRoutes(fastify) {
               )
               .for('update')
 
-            const saldoBaseAnterior = stockProductoRows.reduce(
-              (acc, r) => acc + Number(r.saldo_actual || 0),
+            const saldoBaseAnteriorInt = stockProductoRows.reduce(
+              (acc, r) => acc + normalizeVolumenInt(r.saldo_actual, factorVolumen),
               0
             )
             const stockExistente = stockProductoRows.find(
               (r) => r.presentacion_id === det.presentacion_id
             )
 
-            const nuevoSaldoBaseTotal = saldoBaseAnterior + cantidadBase
+            const nuevoSaldoBaseTotalInt = saldoBaseAnteriorInt + cantidadBaseInt
 
             if (stockExistente) {
-              const nuevoSaldoFila = Number(stockExistente.saldo_actual || 0) + cantidadBase
+              const saldoFilaActualInt = normalizeVolumenInt(stockExistente.saldo_actual, factorVolumen)
+              const nuevoSaldoFilaInt = saldoFilaActualInt + cantidadBaseInt
               await tx
                 .update(schema.stock_actual)
                 .set({
-                  saldo_actual: nuevoSaldoFila,
+                  saldo_actual: nuevoSaldoFilaInt,
                   updated_at: sql`NOW()`
                 })
                 .where(eq(schema.stock_actual.id, stockExistente.id))
@@ -704,7 +725,7 @@ async function ventasRoutes(fastify) {
                 producto_id: det.producto_id,
                 presentacion_id: det.presentacion_id,
                 lotes_id: null,
-                saldo_actual: cantidadBase,
+                saldo_actual: cantidadBaseInt,
                 updated_at: sql`NOW()`
               })
             }
@@ -713,10 +734,10 @@ async function ventasRoutes(fastify) {
               producto_id: det.producto_id,
               presentacion_id: det.presentacion_id,
               lotes_id: null,
-              cantidad: cant,
+              cantidad: cantInt,
               multiplica_por: multiplicaPor,
-              cantidad_base: cantidadBase,
-              saldo: nuevoSaldoBaseTotal,
+              cantidad_base: cantidadBaseInt,
+              saldo: nuevoSaldoBaseTotalInt,
               documento_id: venta.id,
               documento: numeroComprobante,
               tipo_mov: 1,
