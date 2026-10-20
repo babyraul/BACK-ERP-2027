@@ -2,7 +2,7 @@
 
 const { db } = require('../db')
 const schema = require('../db/schema')
-const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
+const { eq, and, or, ilike, desc, sql, inArray } = require('drizzle-orm')
 const { getFactores, toPrecioInt, toVolumenInt, toVolumenVisual } = require('../utils/factores')
 
 /**

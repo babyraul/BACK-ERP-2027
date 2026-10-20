@@ -3,6 +3,7 @@
 const { db } = require('../db')
 const schema = require('../db/schema')
 const { eq, and, or, ilike, desc, sql, inArray } = require('drizzle-orm')
+const { getFactores } = require('../utils/factores')
 
 /**
  * Rutas especializadas para la Gestión de Cajas, Turnos y Totales
@@ -310,20 +311,72 @@ async function cajasRoutes(fastify) {
       .leftJoin(schema.tipo_metodo_pago, eq(schema.caja_totales.metodo_pago_id, schema.tipo_metodo_pago.id))
       .where(eq(schema.caja_totales.caja_turno_id, turno.id))
 
-    // Formatear montos en decimales (división entre 100)
-    const totalesFormateados = totales.map(t => ({
-      ...t,
-      monto_apertura: Number(t.monto_apertura || 0) / 100,
-      monto_sistema: Number(t.monto_sistema || 0) / 100,
-      monto_declarado: Number(t.monto_declarado || 0) / 100,
-      diferencia: Number(t.diferencia || 0) / 100,
-    }))
+    // Consultar pagos reales de ventas vinculadas a este turno desde ventas_pagos
+    const pagosVentas = await db
+      .select({
+        metodo_pago_id: schema.ventas_pagos.metodo_pago_id,
+        total: sql`COALESCE(SUM(${schema.ventas_pagos.monto}), 0)`
+      })
+      .from(schema.ventas_pagos)
+      .innerJoin(schema.ventas, eq(schema.ventas_pagos.venta_id, schema.ventas.id))
+      .where(
+        and(
+          eq(schema.ventas.caja_turno_id, turno.id),
+          eq(schema.ventas_pagos.estado, 'PAGADO'),
+          or(eq(schema.ventas.estado, 'EMITIDO'), sql`${schema.ventas.estado} IS NULL`)
+        )
+      )
+      .groupBy(schema.ventas_pagos.metodo_pago_id)
+
+    const mapaPagos = {}
+    pagosVentas.forEach(p => {
+      mapaPagos[String(p.metodo_pago_id)] = Number(p.total || 0)
+    })
+
+    // Consultar movimientos manuales (ingresos/egresos) para sumar/restar a efectivo
+    const movsTurno = await db
+      .select({
+        tipo: schema.caja_movimientos.tipo_movimiento,
+        total: sql`COALESCE(SUM(${schema.caja_movimientos.monto_total}), 0)`
+      })
+      .from(schema.caja_movimientos)
+      .where(eq(schema.caja_movimientos.caja_turno_id, turno.id))
+      .groupBy(schema.caja_movimientos.tipo_movimiento)
+
+    let netMovsEfectivo = 0
+    movsTurno.forEach(m => {
+      if (m.tipo === 'INGRESO') netMovsEfectivo += Number(m.total || 0)
+      if (m.tipo === 'EGRESO') netMovsEfectivo -= Number(m.total || 0)
+    })
+
+    const { factorPrecio } = await getFactores()
+
+    // Formatear montos en decimales usando el factorPrecio dinámico (ej. 1000) integrando ventas_pagos
+    const totalesFormateados = totales.map(t => {
+      const metodoId = String(t.metodo_pago_id)
+      const montoVentasPagos = mapaPagos[metodoId] || 0
+      const esEfectivo = metodoId === '1' || metodoId === '01'
+      const sistemaInt = montoVentasPagos + (esEfectivo ? netMovsEfectivo : 0)
+
+      return {
+        ...t,
+        monto_apertura: Number(t.monto_apertura || 0) / factorPrecio,
+        monto_sistema: sistemaInt / factorPrecio,
+        monto_declarado: Number(t.monto_declarado || 0) / factorPrecio,
+        diferencia: Number(t.diferencia || 0) / factorPrecio,
+      }
+    })
+
+    const totalEfectivoVentasPagos = (mapaPagos['1'] || mapaPagos['01'] || 0) / factorPrecio
+    const totalEfectivoNeto = ((totales.find(t => String(t.metodo_pago_id) === '1' || String(t.metodo_pago_id) === '01')?.monto_apertura || 0) + (mapaPagos['1'] || mapaPagos['01'] || 0) + netMovsEfectivo) / factorPrecio
 
     return reply.code(200).send({
       success: true,
       data: {
         ...turno,
-        totales: totalesFormateados
+        totales: totalesFormateados,
+        efectivo_ventas_pagos: totalEfectivoVentasPagos,
+        efectivo_total_en_caja: totalEfectivoNeto
       }
     })
   })
@@ -385,19 +438,69 @@ async function cajasRoutes(fastify) {
       .from(schema.ventas)
       .where(eq(schema.ventas.caja_turno_id, id))
 
-    // Formatear totales
-    const totalesFormateados = totales.map(t => ({
-      ...t,
-      monto_apertura: Number(t.monto_apertura || 0) / 100,
-      monto_sistema: Number(t.monto_sistema || 0) / 100,
-      monto_declarado: Number(t.monto_declarado || 0) / 100,
-      diferencia: Number(t.diferencia || 0) / 100,
-    }))
+    // Consultar pagos reales de ventas vinculadas a este turno desde ventas_pagos
+    const pagosVentas = await db
+      .select({
+        metodo_pago_id: schema.ventas_pagos.metodo_pago_id,
+        total: sql`COALESCE(SUM(${schema.ventas_pagos.monto}), 0)`
+      })
+      .from(schema.ventas_pagos)
+      .innerJoin(schema.ventas, eq(schema.ventas_pagos.venta_id, schema.ventas.id))
+      .where(
+        and(
+          eq(schema.ventas.caja_turno_id, id),
+          eq(schema.ventas_pagos.estado, 'PAGADO'),
+          or(eq(schema.ventas.estado, 'EMITIDO'), sql`${schema.ventas.estado} IS NULL`)
+        )
+      )
+      .groupBy(schema.ventas_pagos.metodo_pago_id)
+
+    const mapaPagos = {}
+    pagosVentas.forEach(p => {
+      mapaPagos[String(p.metodo_pago_id)] = Number(p.total || 0)
+    })
+
+    // Consultar movimientos manuales (ingresos/egresos) para sumar/restar a efectivo
+    const movsTurno = await db
+      .select({
+        tipo: schema.caja_movimientos.tipo_movimiento,
+        total: sql`COALESCE(SUM(${schema.caja_movimientos.monto_total}), 0)`
+      })
+      .from(schema.caja_movimientos)
+      .where(eq(schema.caja_movimientos.caja_turno_id, id))
+      .groupBy(schema.caja_movimientos.tipo_movimiento)
+
+    let netMovsEfectivo = 0
+    movsTurno.forEach(m => {
+      if (m.tipo === 'INGRESO') netMovsEfectivo += Number(m.total || 0)
+      if (m.tipo === 'EGRESO') netMovsEfectivo -= Number(m.total || 0)
+    })
+
+    const { factorPrecio } = await getFactores()
+
+    // Formatear totales integrando ventas_pagos reales usando el factorPrecio dinámico
+    const totalesFormateados = totales.map(t => {
+      const metodoId = String(t.metodo_pago_id)
+      const montoVentasPagos = mapaPagos[metodoId] || 0
+      const esEfectivo = metodoId === '1' || metodoId === '01'
+      const sistemaInt = montoVentasPagos + (esEfectivo ? netMovsEfectivo : 0)
+
+      return {
+        ...t,
+        monto_apertura: Number(t.monto_apertura || 0) / factorPrecio,
+        monto_sistema: sistemaInt / factorPrecio,
+        monto_declarado: Number(t.monto_declarado || 0) / factorPrecio,
+        diferencia: Number(t.diferencia || 0) / factorPrecio,
+      }
+    })
 
     const ventasFormateadas = ventasTurno.map(v => ({
       ...v,
-      total_venta: Number(v.total_venta || 0) / 100
+      total_venta: Number(v.total_venta || 0) / factorPrecio
     }))
+
+    const totalEfectivoVentasPagos = (mapaPagos['1'] || mapaPagos['01'] || 0) / factorPrecio
+    const totalEfectivoNeto = ((totales.find(t => String(t.metodo_pago_id) === '1' || String(t.metodo_pago_id) === '01')?.monto_apertura || 0) + (mapaPagos['1'] || mapaPagos['01'] || 0) + netMovsEfectivo) / factorPrecio
 
     return reply.code(200).send({
       success: true,
@@ -405,9 +508,11 @@ async function cajasRoutes(fastify) {
         ...turno,
         totales: totalesFormateados,
         ventas: ventasFormateadas,
+        efectivo_ventas_pagos: totalEfectivoVentasPagos,
+        efectivo_total_en_caja: totalEfectivoNeto,
         resumen_ventas: {
           cantidad: ventasTurno.length,
-          total: ventasTurno.reduce((acc, curr) => acc + (Number(curr.total_venta || 0) / 100), 0)
+          total: ventasTurno.reduce((acc, curr) => acc + (Number(curr.total_venta || 0) / factorPrecio), 0)
         }
       }
     })
@@ -529,13 +634,14 @@ async function cajasRoutes(fastify) {
         })
         .returning()
 
-      const montoEfectivoCentimos = Math.round(Number(monto_apertura || 0) * 100)
+      const { factorPrecio } = await getFactores()
+      const montoEfectivoCentimos = Math.round(Number(monto_apertura || 0) * factorPrecio)
 
       // Mapear importes iniciales si se proporcionaron desglosados
       const mapaIniciales = {}
       if (Array.isArray(totales_iniciales)) {
         totales_iniciales.forEach(t => {
-          mapaIniciales[String(t.metodo_pago_id)] = Math.round(Number(t.monto_apertura || 0) * 100)
+          mapaIniciales[String(t.metodo_pago_id)] = Math.round(Number(t.monto_apertura || 0) * factorPrecio)
         })
       }
 
@@ -602,9 +708,10 @@ async function cajasRoutes(fastify) {
       .where(eq(schema.caja_movimientos.caja_turno_id, id))
       .orderBy(desc(schema.caja_movimientos.created_at))
 
+    const { factorPrecio } = await getFactores()
     const formateados = movimientos.map(m => ({
       ...m,
-      monto_total: Number(m.monto_total || 0) / 100
+      monto_total: Number(m.monto_total || 0) / factorPrecio
     }))
 
     return reply.code(200).send({ success: true, data: formateados })
@@ -640,7 +747,8 @@ async function cajasRoutes(fastify) {
       return reply.code(400).send({ success: false, message: 'No se pueden registrar movimientos en un turno cerrado.' })
     }
 
-    const montoCentimos = Math.round(montoNum * 100)
+    const { factorPrecio } = await getFactores()
+    const montoCentimos = Math.round(montoNum * factorPrecio)
 
     const [nuevoMovimiento] = await db
       .insert(schema.caja_movimientos)
@@ -663,7 +771,7 @@ async function cajasRoutes(fastify) {
       message: `Movimiento de ${tipo_movimiento.toUpperCase()} registrado correctamente`,
       data: {
         ...nuevoMovimiento,
-        monto_total: Number(nuevoMovimiento.monto_total || 0) / 100
+        monto_total: Number(nuevoMovimiento.monto_total || 0) / factorPrecio
       }
     })
   })
@@ -689,10 +797,11 @@ async function cajasRoutes(fastify) {
       .where(eq(schema.caja_arqueos.caja_turno_id, id))
       .orderBy(desc(schema.caja_arqueos.denominacion))
 
+    const { factorPrecio } = await getFactores()
     const formateados = arqueos.map(a => ({
       ...a,
-      denominacion: Number(a.denominacion || 0) / 100,
-      subtotal: Number(a.subtotal || 0) / 100
+      denominacion: Number(a.denominacion || 0) / factorPrecio,
+      subtotal: Number(a.subtotal || 0) / factorPrecio
     }))
 
     const totalFisico = formateados.reduce((acc, curr) => acc + curr.subtotal, 0)
@@ -722,12 +831,14 @@ async function cajasRoutes(fastify) {
 
     if (!turno) throw fastify.httpErrors.notFound('Turno de caja no encontrado')
 
+    const { factorPrecio } = await getFactores()
+
     const result = await db.transaction(async (tx) => {
       // Reemplazar o registrar conteo del turno
       await tx.delete(schema.caja_arqueos).where(eq(schema.caja_arqueos.caja_turno_id, id))
 
       const registros = conteos.map(c => {
-        const denomCent = Math.round(Number(c.denominacion || 0) * 100)
+        const denomCent = Math.round(Number(c.denominacion || 0) * factorPrecio)
         const cant = Math.max(0, parseInt(c.cantidad || 0, 10))
         const subCent = denomCent * cant
 
@@ -775,24 +886,28 @@ async function cajasRoutes(fastify) {
       return reply.code(400).send({ success: false, message: 'El turno ya se encuentra cerrado.' })
     }
 
-    // Calcular montos acumulados por ventas en este turno agrupados por método de pago
-    const ventasDelTurno = await db
+    const { factorPrecio } = await getFactores()
+
+    // Calcular montos acumulados por ventas en este turno agrupados por método de pago desde ventas_pagos reales
+    const ventasPagosDelTurno = await db
       .select({
-        metodo_pago_id: schema.ventas.tipo_pago_id,
-        total: sql`COALESCE(SUM(${schema.ventas.total_venta}), 0)`
+        metodo_pago_id: schema.ventas_pagos.metodo_pago_id,
+        total: sql`COALESCE(SUM(${schema.ventas_pagos.monto}), 0)`
       })
-      .from(schema.ventas)
+      .from(schema.ventas_pagos)
+      .innerJoin(schema.ventas, eq(schema.ventas_pagos.venta_id, schema.ventas.id))
       .where(
         and(
           eq(schema.ventas.caja_turno_id, id),
-          eq(schema.ventas.estado, 'EMITIDO')
+          eq(schema.ventas_pagos.estado, 'PAGADO'),
+          or(eq(schema.ventas.estado, 'EMITIDO'), sql`${schema.ventas.estado} IS NULL`)
         )
       )
-      .groupBy(schema.ventas.tipo_pago_id)
+      .groupBy(schema.ventas_pagos.metodo_pago_id)
 
     const mapaVentas = {}
-    ventasDelTurno.forEach(v => {
-      mapaVentas[v.metodo_pago_id || '1'] = Number(v.total || 0)
+    ventasPagosDelTurno.forEach(v => {
+      mapaVentas[String(v.metodo_pago_id)] = Number(v.total || 0)
     })
 
     // Sumar movimientos manuales (INGRESOS y EGRESOS en efectivo '1')
@@ -828,7 +943,7 @@ async function cajasRoutes(fastify) {
       if (Array.isArray(totales_cierre) && totales_cierre.length > 0) {
         for (const tc of totales_cierre) {
           const metodoId = String(tc.metodo_pago_id || '1')
-          const declaradoCentimos = Math.round(Number(tc.monto_declarado || 0) * 100)
+          const declaradoCentimos = Math.round(Number(tc.monto_declarado || 0) * factorPrecio)
           let ventaSistemaCentimos = mapaVentas[metodoId] || 0
 
           // Buscar registro existente en caja_totales para este turno y método

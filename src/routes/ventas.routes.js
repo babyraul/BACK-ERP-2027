@@ -2,7 +2,7 @@
 
 const { db } = require('../db')
 const schema = require('../db/schema')
-const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
+const { eq, and, or, ilike, desc, sql, inArray } = require('drizzle-orm')
 const {
   getFactores,
   toPrecioInt,
@@ -600,6 +600,7 @@ async function ventasRoutes(fastify) {
           const cantVisual = item.cantVisual
           const cantidadBaseVisual = cantVisual * multiplicaPor
           const cantInt = toVolumenInt(cantVisual, factorVolumen)
+          const cantidadBaseInt = toVolumenInt(cantidadBaseVisual, factorVolumen)
           const precioInt = Math.round(item.precioVisual * factorPrecio)
           const descInt = Math.round(item.descVisual * factorPrecio)
           const itemTotalInt = Math.round(item.itemTotalVisual * factorPrecio)
