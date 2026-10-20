@@ -209,7 +209,7 @@ async function preventasRoutes(fastify) {
         .limit(1)
 
       const tipoComprobanteId =
-        tipo_documento === 'factura' ? '01' : tipo_documento === 'boleta' ? '03' : '00'
+        tipo_documento === 'factura' ? '01' : tipo_documento === 'boleta' ? '03' : 'VL'
 
       const isUUID = (str) =>
         Boolean(str && typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str))
@@ -343,7 +343,7 @@ async function preventasRoutes(fastify) {
       }
 
       const tipoComprobanteId =
-        tipo_documento === 'factura' ? '01' : tipo_documento === 'boleta' ? '03' : (existente.tipo_comprobante_id || '03')
+        tipo_documento === 'factura' ? '01' : tipo_documento === 'boleta' ? '03' : tipo_documento === 'vale' ? 'VL' : (existente.tipo_comprobante_id || 'VL')
 
       const isUUID = (str) =>
         Boolean(str && typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str))

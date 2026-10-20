@@ -30,7 +30,7 @@ async function ventasRoutes(fastify) {
       }
 
       if (tipo_documento) {
-        const tipoId = tipo_documento === 'factura' ? '01' : tipo_documento === 'boleta' ? '03' : '00'
+        const tipoId = tipo_documento === 'factura' ? '01' : tipo_documento === 'boleta' ? '03' : 'VL'
         conditions.push(eq(schema.ventas.tipo_comprobante_id, tipoId))
       }
 
@@ -300,16 +300,30 @@ async function ventasRoutes(fastify) {
         }
       }
 
+      // Validación de concurrencia: Si proviene de preventa, verificar que no esté ya PROCESADA
+      if (preventa_id) {
+        const [pv] = await db
+          .select({ id: schema.pre_ventas.id, estado: schema.pre_ventas.estado })
+          .from(schema.pre_ventas)
+          .where(eq(schema.pre_ventas.id, preventa_id))
+          .limit(1)
+
+        if (pv && pv.estado === 'PROCESADA') {
+          return reply.code(400).send({
+            success: false,
+            message: 'Esta preventa ya ha sido procesada previamente. No se puede cobrar dos veces.'
+          })
+        }
+      }
+
       const tipoDocNormalized = String(tipo_documento || 'boleta').toLowerCase()
       const tipoComprobanteId =
-        tipoDocNormalized === 'factura' ? '01' : tipoDocNormalized === 'boleta' ? '03' : '00'
+        tipoDocNormalized === 'factura' ? '01' : tipoDocNormalized === 'boleta' ? '03' : 'VL'
 
       // Iniciar Transacción Atómica
       const ventaRegistrada = await db.transaction(async (tx) => {
-        // A. Asignar Serie y Correlativo atómico
-        let serieAsignada = 'T001'
-        let correlativoAsignado = 1
-
+        // A. Asignar Serie y Correlativo atómico con bloqueo pesimista FOR UPDATE
+        // Previene race conditions y duplicidad ante ventas masivas concurrentes
         const [serieConfig] = await tx
           .select()
           .from(schema.caja_serie_correlativo)
@@ -321,30 +335,26 @@ async function ventasRoutes(fastify) {
             )
           )
           .limit(1)
+          .for('update')
 
-        if (serieConfig) {
-          serieAsignada = serieConfig.serie
-          correlativoAsignado = (serieConfig.correlativo || 0) + 1
-
-          // Incrementar correlativo
-          await tx
-            .update(schema.caja_serie_correlativo)
-            .set({
-              correlativo: correlativoAsignado,
-              updated_at: new Date().toISOString()
-            })
-            .where(eq(schema.caja_serie_correlativo.id, serieConfig.id))
-        } else {
-          // Si no hay serie configurada, generar serie default por tipo
-          serieAsignada = tipoComprobanteId === '01' ? 'F001' : tipoComprobanteId === '03' ? 'B001' : 'V001'
-          const [ultimaVenta] = await tx
-            .select({ corr: schema.ventas.correlativo })
-            .from(schema.ventas)
-            .where(and(eq(schema.ventas.branch_id, branchId), eq(schema.ventas.serie, serieAsignada)))
-            .orderBy(desc(schema.ventas.correlativo))
-            .limit(1)
-          correlativoAsignado = (ultimaVenta?.corr || 0) + 1
+        if (!serieConfig) {
+          const docNombre = tipoComprobanteId === '01' ? 'Factura' : tipoComprobanteId === '03' ? 'Boleta' : 'Vale'
+          throw new Error(
+            `No existe una serie activa configurada en caja_serie_correlativo para el tipo de comprobante ${docNombre} (${tipoComprobanteId}) en esta sucursal.`
+          )
         }
+
+        const serieAsignada = serieConfig.serie
+        const correlativoAsignado = (serieConfig.correlativo || 0) + 1
+
+        // Incrementar correlativo de forma atómica en la fila bloqueada
+        await tx
+          .update(schema.caja_serie_correlativo)
+          .set({
+            correlativo: correlativoAsignado,
+            updated_at: new Date().toISOString()
+          })
+          .where(eq(schema.caja_serie_correlativo.id, serieConfig.id))
 
         const { factorPrecio } = await getFactores()
 
@@ -441,9 +451,13 @@ async function ventasRoutes(fastify) {
             .limit(1)
 
           if (almacen && item.producto_id && presId) {
-            const [stockExistente] = await tx
-              .select()
-              .from(schema.stock_actual)
+            // Descuento atómico directo en BD: previene condiciones de carrera en inventario
+            await tx
+              .update(schema.stock_actual)
+              .set({
+                saldo_actual: sql`GREATEST(0, COALESCE(${schema.stock_actual.saldo_actual}, 0) - ${cant})`,
+                updated_at: new Date().toISOString()
+              })
               .where(
                 and(
                   eq(schema.stock_actual.branch_id, branchId),
@@ -452,18 +466,6 @@ async function ventasRoutes(fastify) {
                   eq(schema.stock_actual.presentacion_id, presId)
                 )
               )
-              .limit(1)
-
-            if (stockExistente) {
-              const nuevoSaldo = Math.max(0, Number(stockExistente.saldo_actual || 0) - cant)
-              await tx
-                .update(schema.stock_actual)
-                .set({
-                  saldo_actual: nuevoSaldo,
-                  updated_at: new Date().toISOString()
-                })
-                .where(eq(schema.stock_actual.id, stockExistente.id))
-            }
           }
         }
 
