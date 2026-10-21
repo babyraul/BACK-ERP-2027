@@ -28,7 +28,9 @@ __export(schema_exports, {
   caja_movimientos: () => caja_movimientos,
   caja_serie_correlativo: () => caja_serie_correlativo,
   caja_totales: () => caja_totales,
+  caja_turno_pagos: () => caja_turno_pagos,
   caja_turnos: () => caja_turnos,
+  caja_turnos_resumen: () => caja_turnos_resumen,
   categorias: () => categorias,
   clientes: () => clientes,
   combo_detalle_pre_ventas: () => combo_detalle_pre_ventas,
@@ -745,18 +747,78 @@ const caja_turnos = (0, import_pg_core.pgTable)("caja_turnos", {
   created_at: (0, import_pg_core.timestamp)("created_at", { mode: "string" }).defaultNow(),
   updated_at: (0, import_pg_core.timestamp)("updated_at", { mode: "string" }).defaultNow()
 });
-const caja_totales = (0, import_pg_core.pgTable)("caja_totales", {
+const caja_turno_pagos = (0, import_pg_core.pgTable)("caja_turno_pagos", {
   id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
-  caja_turno_id: (0, import_pg_core.uuid)("caja_turno_id").notNull(),
+  caja_turno_id: (0, import_pg_core.uuid)("caja_turno_id").notNull().references(() => caja_turnos.id),
   metodo_pago_id: (0, import_pg_core.varchar)("metodo_pago_id", { length: 5 }).notNull(),
   // You can use { mode: "bigint" } if numbers are exceeding js number limitations
-  monto_apertura: (0, import_pg_core.bigint)("monto_apertura", { mode: "number" }).default(0),
+  monto_sistema: (0, import_pg_core.bigint)("monto_sistema", { mode: "number" }).default(0).notNull(),
   // You can use { mode: "bigint" } if numbers are exceeding js number limitations
-  monto_sistema: (0, import_pg_core.bigint)("monto_sistema", { mode: "number" }).default(0),
+  monto_declarado: (0, import_pg_core.bigint)("monto_declarado", { mode: "number" }).default(0).notNull(),
   // You can use { mode: "bigint" } if numbers are exceeding js number limitations
-  monto_declarado: (0, import_pg_core.bigint)("monto_declarado", { mode: "number" }).default(0),
-  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
-  diferencia: (0, import_pg_core.bigint)("diferencia", { mode: "number" }).default(0),
+  diferencia: (0, import_pg_core.bigint)("diferencia", { mode: "number" }).default(0).notNull(),
+  observacion: (0, import_pg_core.text)("observacion"),
+  sincronizado: (0, import_pg_core.boolean)("sincronizado").default(false),
+  created_at: (0, import_pg_core.timestamp)("created_at", { mode: "string" }).defaultNow().notNull(),
+  updated_at: (0, import_pg_core.timestamp)("updated_at", { mode: "string" }).defaultNow().notNull()
+});
+const caja_totales = caja_turno_pagos; // Alias de compatibilidad hacia atrás
+const caja_turnos_resumen = (0, import_pg_core.pgTable)("caja_turnos_resumen", {
+  id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
+  caja_turno_id: (0, import_pg_core.uuid)("caja_turno_id").notNull().references(() => caja_turnos.id),
+
+  // ===== Totales generales =====
+  total_ventas_brutas: (0, import_pg_core.bigint)("total_ventas_brutas", { mode: "number" }).default(0).notNull(),
+  total_ventas_netas: (0, import_pg_core.bigint)("total_ventas_netas", { mode: "number" }).default(0).notNull(),
+  total_ingresos: (0, import_pg_core.bigint)("total_ingresos", { mode: "number" }).default(0).notNull(),
+  total_egresos: (0, import_pg_core.bigint)("total_egresos", { mode: "number" }).default(0).notNull(),
+  total_ventas_credito: (0, import_pg_core.bigint)("total_ventas_credito", { mode: "number" }).default(0).notNull(),
+  total_ventas_contado: (0, import_pg_core.bigint)("total_ventas_contado", { mode: "number" }).default(0).notNull(),
+
+  // ===== Por tipo de documento =====
+  total_facturas: (0, import_pg_core.bigint)("total_facturas", { mode: "number" }).default(0).notNull(),
+  cantidad_facturas: (0, import_pg_core.integer)("cantidad_facturas").default(0).notNull(),
+  total_boletas: (0, import_pg_core.bigint)("total_boletas", { mode: "number" }).default(0).notNull(),
+  cantidad_boletas: (0, import_pg_core.integer)("cantidad_boletas").default(0).notNull(),
+  total_vales: (0, import_pg_core.bigint)("total_vales", { mode: "number" }).default(0).notNull(),
+  cantidad_vales: (0, import_pg_core.integer)("cantidad_vales").default(0).notNull(),
+  total_notas_credito: (0, import_pg_core.bigint)("total_notas_credito", { mode: "number" }).default(0).notNull(),
+  total_notas_debito: (0, import_pg_core.bigint)("total_notas_debito", { mode: "number" }).default(0).notNull(),
+
+  // ===== Por estado SUNAT =====
+  total_aceptados: (0, import_pg_core.bigint)("total_aceptados", { mode: "number" }).default(0).notNull(),
+  total_observados: (0, import_pg_core.bigint)("total_observados", { mode: "number" }).default(0).notNull(),
+  total_rechazados: (0, import_pg_core.bigint)("total_rechazados", { mode: "number" }).default(0).notNull(),
+  total_pendientes_envio: (0, import_pg_core.bigint)("total_pendientes_envio", { mode: "number" }).default(0).notNull(),
+  cantidad_pendientes_envio: (0, import_pg_core.integer)("cantidad_pendientes_envio").default(0).notNull(),
+
+  // ===== Anulaciones =====
+  total_anulaciones: (0, import_pg_core.bigint)("total_anulaciones", { mode: "number" }).default(0).notNull(),
+  cantidad_anulaciones: (0, import_pg_core.integer)("cantidad_anulaciones").default(0).notNull(),
+
+  // ===== Descuentos e impuestos =====
+  total_descuentos: (0, import_pg_core.bigint)("total_descuentos", { mode: "number" }).default(0).notNull(),
+  cantidad_descuentos: (0, import_pg_core.integer)("cantidad_descuentos").default(0).notNull(),
+  total_impuestos: (0, import_pg_core.bigint)("total_impuestos", { mode: "number" }).default(0).notNull(),
+  total_gravado: (0, import_pg_core.bigint)("total_gravado", { mode: "number" }).default(0).notNull(),
+  total_exonerado: (0, import_pg_core.bigint)("total_exonerado", { mode: "number" }).default(0).notNull(),
+  total_inafecto: (0, import_pg_core.bigint)("total_inafecto", { mode: "number" }).default(0).notNull(),
+
+  // ===== Arqueo =====
+  monto_apertura: (0, import_pg_core.bigint)("monto_apertura", { mode: "number" }).default(0).notNull(),
+  monto_sistema: (0, import_pg_core.bigint)("monto_sistema", { mode: "number" }).default(0).notNull(),
+  monto_declarado: (0, import_pg_core.bigint)("monto_declarado", { mode: "number" }).default(0).notNull(),
+  diferencia: (0, import_pg_core.bigint)("diferencia", { mode: "number" }).default(0).notNull(),
+
+  // ===== Transacciones =====
+  cantidad_transacciones: (0, import_pg_core.integer)("cantidad_transacciones").default(0).notNull(),
+  cantidad_documentos_emitidos: (0, import_pg_core.integer)("cantidad_documentos_emitidos").default(0).notNull(),
+
+  // ===== Desgloses (JSON) =====
+  desglose_metodos_pago_jsonb: (0, import_pg_core.jsonb)("desglose_metodos_pago_jsonb").notNull(),
+  desglose_tipos_pago_jsonb: (0, import_pg_core.jsonb)("desglose_tipos_pago_jsonb").notNull(),
+  desglose_anulaciones_jsonb: (0, import_pg_core.jsonb)("desglose_anulaciones_jsonb").notNull(),
+
   observacion: (0, import_pg_core.text)("observacion"),
   sincronizado: (0, import_pg_core.boolean)("sincronizado").default(false),
   created_at: (0, import_pg_core.timestamp)("created_at", { mode: "string" }).defaultNow().notNull(),
@@ -778,12 +840,20 @@ const caja_movimientos = (0, import_pg_core.pgTable)("caja_movimientos", {
 });
 const caja_arqueos = (0, import_pg_core.pgTable)("caja_arqueos", {
   id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
-  caja_turno_id: (0, import_pg_core.uuid)("caja_turno_id").notNull(),
-  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
-  denominacion: (0, import_pg_core.bigint)("denominacion", { mode: "number" }).notNull(),
-  cantidad: (0, import_pg_core.integer)("cantidad").default(0).notNull(),
-  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  caja_turno_id: (0, import_pg_core.uuid)("caja_turno_id"),
+  caja_movimiento_id: (0, import_pg_core.uuid)("caja_movimiento_id"),
   subtotal: (0, import_pg_core.bigint)("subtotal", { mode: "number" }).default(0).notNull(),
+  billete_200: (0, import_pg_core.integer)("billete_200").default(0).notNull(),
+  billete_100: (0, import_pg_core.integer)("billete_100").default(0).notNull(),
+  billete_50: (0, import_pg_core.integer)("billete_50").default(0).notNull(),
+  billete_20: (0, import_pg_core.integer)("billete_20").default(0).notNull(),
+  billete_10: (0, import_pg_core.integer)("billete_10").default(0).notNull(),
+  moneda_5: (0, import_pg_core.integer)("moneda_5").default(0).notNull(),
+  moneda_2: (0, import_pg_core.integer)("moneda_2").default(0).notNull(),
+  moneda_1: (0, import_pg_core.integer)("moneda_1").default(0).notNull(),
+  moneda_050: (0, import_pg_core.integer)("moneda_050").default(0).notNull(),
+  moneda_020: (0, import_pg_core.integer)("moneda_020").default(0).notNull(),
+  moneda_010: (0, import_pg_core.integer)("moneda_010").default(0).notNull(),
   sincronizado: (0, import_pg_core.boolean)("sincronizado").default(false),
   created_at: (0, import_pg_core.timestamp)("created_at", { mode: "string" }).defaultNow().notNull(),
   updated_at: (0, import_pg_core.timestamp)("updated_at", { mode: "string" }).defaultNow().notNull()

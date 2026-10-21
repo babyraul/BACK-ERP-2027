@@ -504,19 +504,86 @@ CREATE TABLE IF NOT EXISTS "caja_turnos" (
     "updated_at" timestamp DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS "caja_totales" (
+CREATE TABLE IF NOT EXISTS "caja_turno_pagos" (
     "id" uuid PRIMARY KEY NOT NULL DEFAULT gen_random_uuid(),
-    "caja_turno_id" uuid NOT NULL,
+    "caja_turno_id" uuid NOT NULL REFERENCES caja_turnos(id) ON DELETE CASCADE,
     "metodo_pago_id" varchar(5) NOT NULL,
-    "monto_apertura" int8 DEFAULT 0,
-    "monto_sistema" int8 DEFAULT 0,
-    "monto_declarado" int8 DEFAULT 0,
-    "diferencia" int8 DEFAULT 0,
+    "monto_sistema" bigint NOT NULL DEFAULT 0,
+    "monto_declarado" bigint NOT NULL DEFAULT 0,
+    "diferencia" bigint NOT NULL DEFAULT 0,
     "observacion" text,
     "sincronizado" boolean DEFAULT false,
     "created_at" timestamp NOT NULL DEFAULT now(),
     "updated_at" timestamp NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS "caja_turnos_resumen" (
+    "id" uuid PRIMARY KEY NOT NULL DEFAULT gen_random_uuid(),
+    "caja_turno_id" uuid NOT NULL UNIQUE REFERENCES caja_turnos(id) ON DELETE CASCADE,
+
+    -- ===== Totales generales =====
+    "total_ventas_brutas" bigint NOT NULL DEFAULT 0,
+    "total_ventas_netas" bigint NOT NULL DEFAULT 0,
+    "total_ingresos" bigint NOT NULL DEFAULT 0,
+    "total_egresos" bigint NOT NULL DEFAULT 0,
+    "total_ventas_credito" bigint NOT NULL DEFAULT 0,
+    "total_ventas_contado" bigint NOT NULL DEFAULT 0,
+
+    -- ===== Por tipo de documento =====
+    "total_facturas" bigint NOT NULL DEFAULT 0,
+    "cantidad_facturas" int NOT NULL DEFAULT 0,
+    "total_boletas" bigint NOT NULL DEFAULT 0,
+    "cantidad_boletas" int NOT NULL DEFAULT 0,
+    "total_vales" bigint NOT NULL DEFAULT 0,
+    "cantidad_vales" int NOT NULL DEFAULT 0,
+    "total_notas_credito" bigint NOT NULL DEFAULT 0,
+    "total_notas_debito" bigint NOT NULL DEFAULT 0,
+
+    -- ===== Por estado SUNAT =====
+    "total_aceptados" bigint NOT NULL DEFAULT 0,
+    "total_observados" bigint NOT NULL DEFAULT 0,
+    "total_rechazados" bigint NOT NULL DEFAULT 0,
+    "total_pendientes_envio" bigint NOT NULL DEFAULT 0,
+    "cantidad_pendientes_envio" integer NOT NULL DEFAULT 0,
+
+    -- ===== Anulaciones =====
+    "total_anulaciones" bigint NOT NULL DEFAULT 0,
+    "cantidad_anulaciones" integer NOT NULL DEFAULT 0,
+
+    -- ===== Descuentos e impuestos =====
+    "total_descuentos" bigint NOT NULL DEFAULT 0,
+    "cantidad_descuentos" integer NOT NULL DEFAULT 0,
+    "total_impuestos" bigint NOT NULL DEFAULT 0,
+    "total_gravado" bigint NOT NULL DEFAULT 0,
+    "total_exonerado" bigint NOT NULL DEFAULT 0,
+    "total_inafecto" bigint NOT NULL DEFAULT 0,
+
+    -- ===== Arqueo =====
+    "monto_apertura" bigint NOT NULL DEFAULT 0,
+    "monto_sistema" bigint NOT NULL DEFAULT 0,
+    "monto_declarado" bigint NOT NULL DEFAULT 0,
+    "diferencia" bigint NOT NULL DEFAULT 0,
+
+    -- ===== Transacciones =====
+    "cantidad_transacciones" integer NOT NULL DEFAULT 0,
+    "cantidad_documentos_emitidos" integer NOT NULL DEFAULT 0,
+
+    -- ===== Desgloses (JSON) =====
+    "desglose_metodos_pago_jsonb" jsonb NOT NULL DEFAULT '[]'::jsonb,
+    "desglose_tipos_pago_jsonb" jsonb NOT NULL DEFAULT '[]'::jsonb,
+    "desglose_anulaciones_jsonb" jsonb NOT NULL DEFAULT '[]'::jsonb,
+
+    "observacion" text,
+    "sincronizado" bool DEFAULT false,
+    "created_at" timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS "idx_caja_turno_pagos_turno" ON "caja_turno_pagos" ("caja_turno_id");
+CREATE INDEX IF NOT EXISTS "idx_caja_turno_pagos_metodo" ON "caja_turno_pagos" ("caja_turno_id", "metodo_pago_id");
+CREATE INDEX IF NOT EXISTS "idx_caja_turnos_resumen_desglose_metodos" ON "caja_turnos_resumen" USING gin ("desglose_metodos_pago_jsonb");
+CREATE INDEX IF NOT EXISTS "idx_caja_turnos_resumen_desglose_tipos" ON "caja_turnos_resumen" USING gin ("desglose_tipos_pago_jsonb");
+CREATE INDEX IF NOT EXISTS "idx_caja_turnos_resumen_desglose_anulaciones" ON "caja_turnos_resumen" USING gin ("desglose_anulaciones_jsonb");
 
 CREATE TABLE IF NOT EXISTS "caja_movimientos" (
     "id" uuid PRIMARY KEY NOT NULL DEFAULT gen_random_uuid(),
@@ -534,10 +601,20 @@ CREATE TABLE IF NOT EXISTS "caja_movimientos" (
 
 CREATE TABLE IF NOT EXISTS "caja_arqueos" (
     "id" uuid PRIMARY KEY NOT NULL DEFAULT gen_random_uuid(),
-    "caja_turno_id" uuid NOT NULL,
-    "denominacion" int8 NOT NULL,
-    "cantidad" int NOT NULL DEFAULT 0,
+    "caja_turno_id" uuid,
+    "caja_movimiento_id" uuid,
     "subtotal" int8 NOT NULL DEFAULT 0,
+    "billete_200" int4 NOT NULL DEFAULT 0,
+    "billete_100" int4 NOT NULL DEFAULT 0,
+    "billete_50" int4 NOT NULL DEFAULT 0,
+    "billete_20" int4 NOT NULL DEFAULT 0,
+    "billete_10" int4 NOT NULL DEFAULT 0,
+    "moneda_5" int4 NOT NULL DEFAULT 0,
+    "moneda_2" int4 NOT NULL DEFAULT 0,
+    "moneda_1" int4 NOT NULL DEFAULT 0,
+    "moneda_050" int4 NOT NULL DEFAULT 0,
+    "moneda_020" int4 NOT NULL DEFAULT 0,
+    "moneda_010" int4 NOT NULL DEFAULT 0,
     "sincronizado" boolean DEFAULT false,
     "created_at" timestamp NOT NULL DEFAULT now(),
     "updated_at" timestamp NOT NULL DEFAULT now()
