@@ -1662,6 +1662,10 @@ const combo_detalles = (0, import_pg_core.pgTable)("combo_detalles", {
   presentacion_componente_id: (0, import_pg_core.uuid)("presentacion_componente_id").notNull(),
   // You can use { mode: "bigint" } if numbers are exceeding js number limitations
   cantidad: (0, import_pg_core.bigint)("cantidad", { mode: "number" }).default(1).notNull(),
+  tipo_ajuste: (0, import_pg_core.varchar)("tipo_ajuste", { length: 20 }).default("MARGEN").notNull(), // 'MARGEN' o 'DESCUENTO'
+  valor_ajuste: (0, import_pg_core.numeric)("valor_ajuste", { precision: 12, scale: 4 }).default("0.0000").notNull(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  precio_final: (0, import_pg_core.bigint)("precio_final", { mode: "number" }).default(0).notNull(),
   activo: (0, import_pg_core.boolean)("activo").default(true).notNull(),
   sincronizado: (0, import_pg_core.boolean)("sincronizado").default(false).notNull(),
   created_at: (0, import_pg_core.timestamp)("created_at", { withTimezone: true, mode: "string" }).defaultNow().notNull(),

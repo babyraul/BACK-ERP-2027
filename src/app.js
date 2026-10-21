@@ -21,6 +21,7 @@ const tablasFijasRoutes = require('./routes/tablasFijas.routes')
 const proveedoresRoutes = require('./routes/proveedores.routes')
 const preventasRoutes   = require('./routes/preventas.routes')
 const stockRoutes       = require('./routes/stock.routes')
+const combosRoutes      = require('./routes/combos.routes')
 
 async function buildApp(opts = {}) {
   const app = Fastify({
@@ -52,6 +53,7 @@ async function buildApp(opts = {}) {
   await app.register(tablasFijasRoutes,{ prefix: '/api' })
   await app.register(proveedoresRoutes,{ prefix: '/api/proveedores' })
   await app.register(stockRoutes,      { prefix: '/api/stock' })
+  await app.register(combosRoutes,     { prefix: '/api/combos' })
 
   return app
 }

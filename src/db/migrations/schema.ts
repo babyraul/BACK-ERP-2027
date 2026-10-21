@@ -1508,6 +1508,10 @@ export const combo_detalles = pgTable("combo_detalles", {
 	presentacion_componente_id: uuid("presentacion_componente_id").notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	cantidad: bigint("cantidad", { mode: "number" }).default(1).notNull(),
+	tipo_ajuste: varchar("tipo_ajuste", { length: 20 }).default('MARGEN').notNull(),
+	valor_ajuste: numeric("valor_ajuste", { precision: 12, scale: 4 }).default('0.0000').notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	precio_final: bigint("precio_final", { mode: "number" }).default(0).notNull(),
 	activo: boolean("activo").default(true).notNull(),
 	sincronizado: boolean("sincronizado").default(false).notNull(),
 	created_at: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),

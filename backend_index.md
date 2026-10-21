@@ -338,6 +338,20 @@ Centraliza todos los catálogos estáticos y tablas fijas del sistema y de SUNAT
 
 ---
 
+### 2.13.0 Combos Promocionales (`/api/combos`)
+*Archivo: `src/routes/combos.routes.js`* · *Maneja `productos` (`es_combo = true`), `presentaciones` y `combo_detalles`*
+
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/api/combos` | Bearer JWT | Autenticado | Lista combos promocionales activos e inactivos de la empresa con stock virtual dinámico calculado en tiempo real ($\min \lfloor\text{stock}_i / \text{cant}_i\rfloor$) y desglose de componentes. |
+| `GET` | `/api/combos/:id` | Bearer JWT | Autenticado | Retorna cabecera del combo, precio acumulado y array de productos componentes enriquecidos con su precio costo, venta y ajuste. |
+| `POST` | `/api/combos` | Bearer JWT | Autenticado | **Creación Transaccional de Combo:** Inserta producto (`es_combo: true`), presentación principal y componentes en `combo_detalles` con doble modalidad (`tipo_ajuste: 'MARGEN' \| 'DESCUENTO'`). Valida no duplicados y unicidad de código de barras. |
+| `PUT` | `/api/combos/:id` | Bearer JWT | Autenticado | **Edición Transaccional de Combo:** Actualiza cabecera y reemplaza atómicamente los ítems en `combo_detalles` recalculando el precio total del paquete. |
+| `PATCH` | `/api/combos/:id` | Bearer JWT | Autenticado | Conmuta el estado del combo entre `'Activo'` e `'Inactivo'` actualizando sincronizadamente sus presentaciones. Body: `{ Estado: 'Activo' \| 'Inactivo' }`. |
+| `DELETE` | `/api/combos/:id` | Bearer JWT | Autenticado | Borrado físico transaccional del combo, su presentación y sus relaciones en `combo_detalles`. |
+
+---
+
 ### 2.13.1 Pre-Ventas (`/api/preventas`)
 *Archivo: `src/routes/preventas.routes.js`* · *Maneja `pre_ventas` y `detalle_pre_ventas`*
 
