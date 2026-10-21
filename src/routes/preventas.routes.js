@@ -170,10 +170,40 @@ async function preventasRoutes(fastify) {
         .leftJoin(schema.presentaciones, eq(schema.detalle_pre_ventas.presentacion_id, schema.presentaciones.id))
         .where(eq(schema.detalle_pre_ventas.preventa_id, id))
 
+      // Obtener desglose de combos asociados a los items si existen
+      const detalleIds = rawItems.map((it) => it.id).filter(Boolean)
+      let comboDetallesMap = {}
+      if (detalleIds.length > 0) {
+        const comboRows = await db
+          .select({
+            id: schema.combo_detalle_pre_ventas.id,
+            detalle_pre_venta_id: schema.combo_detalle_pre_ventas.detalle_pre_venta_id,
+            producto_componente_id: schema.combo_detalle_pre_ventas.producto_componente_id,
+            presentacion_componente_id: schema.combo_detalle_pre_ventas.presentacion_componente_id,
+            producto_nombre: schema.combo_detalle_pre_ventas.producto_nombre_snapshot,
+            presentacion_nombre: schema.combo_detalle_pre_ventas.presentacion_nombre_snapshot,
+            cantidad_base_prevista: schema.combo_detalle_pre_ventas.cantidad_base_prevista,
+            multiplica_por: schema.combo_detalle_pre_ventas.multiplica_por_snapshot
+          })
+          .from(schema.combo_detalle_pre_ventas)
+          .where(inArray(schema.combo_detalle_pre_ventas.detalle_pre_venta_id, detalleIds))
+
+        comboRows.forEach((r) => {
+          if (!comboDetallesMap[r.detalle_pre_venta_id]) {
+            comboDetallesMap[r.detalle_pre_venta_id] = []
+          }
+          comboDetallesMap[r.detalle_pre_venta_id].push({
+            ...r,
+            cantidad_base_prevista: toVolumenVisual(r.cantidad_base_prevista, factorVolumen)
+          })
+        })
+      }
+
       const items = rawItems.map((it) => ({
         ...it,
         cantidad: toVolumenVisual(it.cantidad, factorVolumen),
-        cantidad_raw: Number(it.cantidad || 0)
+        cantidad_raw: Number(it.cantidad || 0),
+        combo_detalles: comboDetallesMap[it.id] || []
       }))
 
       return reply.code(200).send({
@@ -243,12 +273,16 @@ async function preventasRoutes(fastify) {
           const prodsDb = await tx
             .select({
               id: schema.productos.id,
-              tipo_tributo: schema.productos.tipo_tributo
+              tipo_tributo: schema.productos.tipo_tributo,
+              es_combo: schema.productos.es_combo
             })
             .from(schema.productos)
             .where(inArray(schema.productos.id, prodIds))
           prodsDb.forEach((p) => {
-            prodsMap[p.id] = p.tipo_tributo
+            prodsMap[p.id] = {
+              tipo_tributo: p.tipo_tributo,
+              es_combo: p.es_combo
+            }
           })
         }
 
@@ -264,7 +298,7 @@ async function preventasRoutes(fastify) {
           const descVisual = Number(item.descuento || 0)
           const isGratuito = Boolean(item.gratuito || item.es_gratuito)
 
-          const afectacionRaw = String(item.tipo_afectacion_igv || prodsMap[item.producto_id] || '10').trim()
+          const afectacionRaw = String(item.tipo_afectacion_igv || prodsMap[item.producto_id]?.tipo_tributo || '10').trim()
           const afectacionNum = parseInt(afectacionRaw, 10) || 10
 
           let itemSubtotalVisual = 0
@@ -370,16 +404,69 @@ async function preventasRoutes(fastify) {
           const itemSubtotalInt = Math.round(item.itemSubtotalVisual * factorPrecio)
           const itemIgvInt = Math.round(item.itemIgvVisual * factorPrecio)
 
-          await tx.insert(schema.detalle_pre_ventas).values({
-            preventa_id: nuevaPreventa.id,
-            producto_id: item.producto_id,
-            presentacion_id: presId,
-            cantidad: cantInt,
-            precio_unitario: precioInt,
-            subtotal: itemSubtotalInt,
-            igv: itemIgvInt,
-            total: itemTotalInt
-          })
+          const [nuevoDetalle] = await tx
+            .insert(schema.detalle_pre_ventas)
+            .values({
+              preventa_id: nuevaPreventa.id,
+              producto_id: item.producto_id,
+              presentacion_id: presId,
+              cantidad: cantInt,
+              precio_unitario: precioInt,
+              subtotal: itemSubtotalInt,
+              igv: itemIgvInt,
+              total: itemTotalInt
+            })
+            .returning()
+
+          // C. Si el producto es un Combo o la presentación tiene componentes en combo_detalles, registrar desglose
+          const esCombo = Boolean(prodsMap[item.producto_id]?.es_combo)
+          if (presId && (esCombo || item.es_combo)) {
+            const componentes = await tx
+              .select({
+                id: schema.combo_detalles.id,
+                presentacion_componente_id: schema.combo_detalles.presentacion_componente_id,
+                cantidad: schema.combo_detalles.cantidad,
+                comp_nombre: schema.presentaciones.nombre,
+                comp_producto_uuid: schema.presentaciones.producto_uuid,
+                comp_multiplica_por: schema.presentaciones.multiplica_por,
+                prod_nombre: schema.productos.nombre
+              })
+              .from(schema.combo_detalles)
+              .leftJoin(
+                schema.presentaciones,
+                eq(schema.combo_detalles.presentacion_componente_id, schema.presentaciones.id)
+              )
+              .leftJoin(
+                schema.productos,
+                eq(schema.presentaciones.producto_uuid, schema.productos.id)
+              )
+              .where(
+                and(
+                  eq(schema.combo_detalles.presentacion_combo_id, presId),
+                  eq(schema.combo_detalles.activo, true)
+                )
+              )
+
+            for (const comp of componentes) {
+              const cantCompItem = Number(comp.cantidad || 1)
+              const multiplicaComp = Math.max(1, Number(comp.comp_multiplica_por || 1))
+              const cantBasePrevistaComp = toVolumenInt(
+                item.cantVisual * cantCompItem * multiplicaComp,
+                factorVolumen
+              )
+
+              await tx.insert(schema.combo_detalle_pre_ventas).values({
+                branch_id: branchId,
+                detalle_pre_venta_id: nuevoDetalle.id,
+                producto_componente_id: comp.comp_producto_uuid,
+                presentacion_componente_id: comp.presentacion_componente_id,
+                producto_nombre_snapshot: comp.prod_nombre || 'COMPONENTE',
+                presentacion_nombre_snapshot: comp.comp_nombre || 'UNIDAD',
+                cantidad_base_prevista: cantBasePrevistaComp,
+                multiplica_por_snapshot: multiplicaComp
+              })
+            }
+          }
         }
 
         return nuevaPreventa
@@ -448,12 +535,16 @@ async function preventasRoutes(fastify) {
           const prodsDb = await tx
             .select({
               id: schema.productos.id,
-              tipo_tributo: schema.productos.tipo_tributo
+              tipo_tributo: schema.productos.tipo_tributo,
+              es_combo: schema.productos.es_combo
             })
             .from(schema.productos)
             .where(inArray(schema.productos.id, prodIds))
           prodsDb.forEach((p) => {
-            prodsMap[p.id] = p.tipo_tributo
+            prodsMap[p.id] = {
+              tipo_tributo: p.tipo_tributo,
+              es_combo: p.es_combo
+            }
           })
         }
 
@@ -470,7 +561,7 @@ async function preventasRoutes(fastify) {
           const descVisual = Number(item.descuento || 0)
           const isGratuito = Boolean(item.gratuito || item.es_gratuito)
 
-          const afectacionRaw = String(item.tipo_afectacion_igv || prodsMap[prodId] || '10').trim()
+          const afectacionRaw = String(item.tipo_afectacion_igv || prodsMap[prodId]?.tipo_tributo || '10').trim()
           const afectacionNum = parseInt(afectacionRaw, 10) || 10
 
           let itemSubtotalVisual = 0
@@ -542,6 +633,19 @@ async function preventasRoutes(fastify) {
 
         // B. Reemplazar detalle si vienen ítems
         if (itemsProcesados && itemsProcesados.length > 0) {
+          // Obtener IDs de detalles anteriores para limpiar combo_detalle_pre_ventas asociados
+          const detallesAnteriores = await tx
+            .select({ id: schema.detalle_pre_ventas.id })
+            .from(schema.detalle_pre_ventas)
+            .where(eq(schema.detalle_pre_ventas.preventa_id, id))
+
+          if (detallesAnteriores.length > 0) {
+            const antDetIds = detallesAnteriores.map((d) => d.id)
+            await tx
+              .delete(schema.combo_detalle_pre_ventas)
+              .where(inArray(schema.combo_detalle_pre_ventas.detalle_pre_venta_id, antDetIds))
+          }
+
           await tx.delete(schema.detalle_pre_ventas).where(eq(schema.detalle_pre_ventas.preventa_id, id))
 
           for (const item of itemsProcesados) {
@@ -579,16 +683,69 @@ async function preventasRoutes(fastify) {
             const itemSubtotalInt = Math.round(item.itemSubtotalVisual * factorPrecio)
             const itemIgvInt = Math.round(item.itemIgvVisual * factorPrecio)
 
-            await tx.insert(schema.detalle_pre_ventas).values({
-              preventa_id: id,
-              producto_id: prodId,
-              presentacion_id: presId,
-              cantidad: cantInt,
-              precio_unitario: precioInt,
-              subtotal: itemSubtotalInt,
-              igv: itemIgvInt,
-              total: itemTotalInt
-            })
+            const [nuevoDetalle] = await tx
+              .insert(schema.detalle_pre_ventas)
+              .values({
+                preventa_id: id,
+                producto_id: prodId,
+                presentacion_id: presId,
+                cantidad: cantInt,
+                precio_unitario: precioInt,
+                subtotal: itemSubtotalInt,
+                igv: itemIgvInt,
+                total: itemTotalInt
+              })
+              .returning()
+
+            // C. Si es combo, registrar desglose de componentes en combo_detalle_pre_ventas
+            const esCombo = Boolean(prodsMap[prodId]?.es_combo)
+            if (presId && (esCombo || item.es_combo)) {
+              const componentes = await tx
+                .select({
+                  id: schema.combo_detalles.id,
+                  presentacion_componente_id: schema.combo_detalles.presentacion_componente_id,
+                  cantidad: schema.combo_detalles.cantidad,
+                  comp_nombre: schema.presentaciones.nombre,
+                  comp_producto_uuid: schema.presentaciones.producto_uuid,
+                  comp_multiplica_por: schema.presentaciones.multiplica_por,
+                  prod_nombre: schema.productos.nombre
+                })
+                .from(schema.combo_detalles)
+                .leftJoin(
+                  schema.presentaciones,
+                  eq(schema.combo_detalles.presentacion_componente_id, schema.presentaciones.id)
+                )
+                .leftJoin(
+                  schema.productos,
+                  eq(schema.presentaciones.producto_uuid, schema.productos.id)
+                )
+                .where(
+                  and(
+                    eq(schema.combo_detalles.presentacion_combo_id, presId),
+                    eq(schema.combo_detalles.activo, true)
+                  )
+                )
+
+              for (const comp of componentes) {
+                const cantCompItem = Number(comp.cantidad || 1)
+                const multiplicaComp = Math.max(1, Number(comp.comp_multiplica_por || 1))
+                const cantBasePrevistaComp = toVolumenInt(
+                  item.cantVisual * cantCompItem * multiplicaComp,
+                  factorVolumen
+                )
+
+                await tx.insert(schema.combo_detalle_pre_ventas).values({
+                  branch_id: existente.branch_id,
+                  detalle_pre_venta_id: nuevoDetalle.id,
+                  producto_componente_id: comp.comp_producto_uuid,
+                  presentacion_componente_id: comp.presentacion_componente_id,
+                  producto_nombre_snapshot: comp.prod_nombre || 'COMPONENTE',
+                  presentacion_nombre_snapshot: comp.comp_nombre || 'UNIDAD',
+                  cantidad_base_prevista: cantBasePrevistaComp,
+                  multiplica_por_snapshot: multiplicaComp
+                })
+              }
+            }
           }
         }
       })

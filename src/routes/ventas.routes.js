@@ -213,13 +213,46 @@ async function ventasRoutes(fastify) {
         .leftJoin(schema.presentaciones, eq(schema.detalle_ventas.presentacion_id, schema.presentaciones.id))
         .where(eq(schema.detalle_ventas.venta_id, id))
 
+      // Obtener desglose de combos asociados a los items si existen
+      const detalleVentaIds = rawItems.map((it) => it.id).filter(Boolean)
+      let comboDetallesVentaMap = {}
+      if (detalleVentaIds.length > 0) {
+        const comboRows = await db
+          .select({
+            id: schema.combo_detalle_ventas.id,
+            detalle_venta_id: schema.combo_detalle_ventas.detalle_venta_id,
+            producto_componente_id: schema.combo_detalle_ventas.producto_componente_id,
+            presentacion_componente_id: schema.combo_detalle_ventas.presentacion_componente_id,
+            producto_nombre: schema.combo_detalle_ventas.producto_nombre_snapshot,
+            presentacion_nombre: schema.combo_detalle_ventas.presentacion_nombre_snapshot,
+            cantidad_base: schema.combo_detalle_ventas.cantidad_base,
+            multiplica_por: schema.combo_detalle_ventas.multiplica_por_snapshot,
+            costo_unitario_base: schema.combo_detalle_ventas.costo_unitario_base_snapshot,
+            costo_total: sql`ROUND(CAST(${schema.combo_detalle_ventas.costo_total_snapshot} AS numeric) / ${factorPrecio}, 2)`,
+            precio_proporcional: sql`ROUND(CAST(${schema.combo_detalle_ventas.precio_proporcional_historico} AS numeric) / ${factorPrecio}, 2)`
+          })
+          .from(schema.combo_detalle_ventas)
+          .where(inArray(schema.combo_detalle_ventas.detalle_venta_id, detalleVentaIds))
+
+        comboRows.forEach((r) => {
+          if (!comboDetallesVentaMap[r.detalle_venta_id]) {
+            comboDetallesVentaMap[r.detalle_venta_id] = []
+          }
+          comboDetallesVentaMap[r.detalle_venta_id].push({
+            ...r,
+            cantidad_base: toVolumenVisual(r.cantidad_base, factorVolumen)
+          })
+        })
+      }
+
       const items = rawItems.map((it) => {
         const unidad = it.presentacion_unidad_medida_id || it.producto_unidad_medida_id || 'NIU'
         return {
           ...it,
           unidad_medida_id: unidad,
           cantidad: toVolumenVisual(it.cantidad, factorVolumen),
-          cantidad_raw: Number(it.cantidad || 0)
+          cantidad_raw: Number(it.cantidad || 0),
+          combo_detalles: comboDetallesVentaMap[it.id] || []
         }
       })
 
@@ -414,12 +447,16 @@ async function ventasRoutes(fastify) {
           const prodsDb = await tx
             .select({
               id: schema.productos.id,
-              tipo_tributo: schema.productos.tipo_tributo
+              tipo_tributo: schema.productos.tipo_tributo,
+              es_combo: schema.productos.es_combo
             })
             .from(schema.productos)
             .where(inArray(schema.productos.id, prodIds))
           prodsDb.forEach((p) => {
-            prodsMap[p.id] = p.tipo_tributo
+            prodsMap[p.id] = {
+              tipo_tributo: p.tipo_tributo,
+              es_combo: p.es_combo
+            }
           })
         }
 
@@ -437,7 +474,7 @@ async function ventasRoutes(fastify) {
           const isGratuito = Boolean(item.gratuito || item.es_gratuito)
 
           // Afectación: tomar de item o de BD (Productos.tipo_tributo)
-          const afectacionRaw = String(item.tipo_afectacion_igv || prodsMap[item.producto_id] || '10').trim()
+          const afectacionRaw = String(item.tipo_afectacion_igv || prodsMap[item.producto_id]?.tipo_tributo || '10').trim()
           const afectacionNum = parseInt(afectacionRaw, 10) || 10
 
           let itemSubtotalVisual = 0
@@ -607,82 +644,221 @@ async function ventasRoutes(fastify) {
           const itemSubtotalInt = Math.round(item.itemSubtotalVisual * factorPrecio)
           const itemIgvInt = Math.round(item.itemIgvVisual * factorPrecio)
 
-          await tx.insert(schema.detalle_ventas).values({
-            venta_id: nuevaVenta.id,
-            producto_id: item.producto_id,
-            presentacion_id: presId,
-            cantidad: cantInt,
-            precio_unitario: precioInt,
-            subtotal: itemSubtotalInt,
-            igv: itemIgvInt,
-            total: itemTotalInt,
-            descuento: descInt,
-            tipo_afectacion_igv: item.afectacionNum
-          })
+          const [nuevoDetalleVenta] = await tx
+            .insert(schema.detalle_ventas)
+            .values({
+              venta_id: nuevaVenta.id,
+              producto_id: item.producto_id,
+              presentacion_id: presId,
+              cantidad: cantInt,
+              precio_unitario: precioInt,
+              subtotal: itemSubtotalInt,
+              igv: itemIgvInt,
+              total: itemTotalInt,
+              descuento: descInt,
+              tipo_afectacion_igv: item.afectacionNum
+            })
+            .returning()
 
-          // D. Actualizar stock_actual (permitiendo stock negativo) e insertar Kárdex en tabla stock (escalado por factorVolumen)
-          if (almacen && item.producto_id && presId) {
-            const stockProductoRows = await tx
-              .select()
-              .from(schema.stock_actual)
+          // D. Verificar si es un Combo para descontar stock de componentes y registrar combo_detalle_ventas
+          const esCombo = Boolean(prodsMap[item.producto_id]?.es_combo || item.es_combo)
+          let componentes = []
+          if (presId && (esCombo || item.es_combo)) {
+            componentes = await tx
+              .select({
+                id: schema.combo_detalles.id,
+                presentacion_componente_id: schema.combo_detalles.presentacion_componente_id,
+                cantidad: schema.combo_detalles.cantidad,
+                precio_final: schema.combo_detalles.precio_final,
+                comp_nombre: schema.presentaciones.nombre,
+                comp_producto_uuid: schema.presentaciones.producto_uuid,
+                comp_multiplica_por: schema.presentaciones.multiplica_por,
+                comp_precio_costo: schema.presentaciones.precio_costo,
+                prod_nombre: schema.productos.nombre
+              })
+              .from(schema.combo_detalles)
+              .leftJoin(
+                schema.presentaciones,
+                eq(schema.combo_detalles.presentacion_componente_id, schema.presentaciones.id)
+              )
+              .leftJoin(
+                schema.productos,
+                eq(schema.presentaciones.producto_uuid, schema.productos.id)
+              )
               .where(
                 and(
-                  eq(schema.stock_actual.branch_id, branchId),
-                  eq(schema.stock_actual.almacen_id, almacen.id),
-                  eq(schema.stock_actual.producto_id, item.producto_id)
+                  eq(schema.combo_detalles.presentacion_combo_id, presId),
+                  eq(schema.combo_detalles.activo, true)
                 )
               )
-              .for('update')
+          }
 
-            const saldoBaseAnteriorInt = stockProductoRows.reduce(
-              (acc, r) => acc + normalizeVolumenInt(r.saldo_actual, factorVolumen),
-              0
-            )
-            const stockExistente = stockProductoRows.find(
-              (r) => r.presentacion_id === presId
-            )
+          if (componentes.length > 0) {
+            // ES UN COMBO: Se descuenta el stock de cada sub-producto componente y se audita en combo_detalle_ventas
+            for (const comp of componentes) {
+              const cantCompItem = Number(comp.cantidad || 1)
+              const multiplicaComp = Math.max(1, Number(comp.comp_multiplica_por || 1))
+              const cantCompTotalVisual = cantVisual * cantCompItem
+              const cantCompTotalBaseVisual = cantCompTotalVisual * multiplicaComp
+              const cantCompInt = toVolumenInt(cantCompTotalVisual, factorVolumen)
+              const cantCompBaseInt = toVolumenInt(cantCompTotalBaseVisual, factorVolumen)
 
-            const nuevoSaldoBaseTotalInt = saldoBaseAnteriorInt - cantidadBaseInt
+              // Stock de subproducto en almacén
+              let nuevoSaldoBaseCompInt = 0
+              if (almacen && comp.comp_producto_uuid && comp.presentacion_componente_id) {
+                const stockCompRows = await tx
+                  .select()
+                  .from(schema.stock_actual)
+                  .where(
+                    and(
+                      eq(schema.stock_actual.branch_id, branchId),
+                      eq(schema.stock_actual.almacen_id, almacen.id),
+                      eq(schema.stock_actual.producto_id, comp.comp_producto_uuid)
+                    )
+                  )
+                  .for('update')
 
-            if (stockExistente) {
-              const saldoFilaActualInt = normalizeVolumenInt(stockExistente.saldo_actual, factorVolumen)
-              const nuevoSaldoFilaInt = saldoFilaActualInt - cantidadBaseInt
-              await tx
-                .update(schema.stock_actual)
-                .set({
-                  saldo_actual: nuevoSaldoFilaInt,
+                const saldoCompAnteriorInt = stockCompRows.reduce(
+                  (acc, r) => acc + normalizeVolumenInt(r.saldo_actual, factorVolumen),
+                  0
+                )
+                const stockCompExistente = stockCompRows.find(
+                  (r) => r.presentacion_id === comp.presentacion_componente_id
+                )
+
+                nuevoSaldoBaseCompInt = saldoCompAnteriorInt - cantCompBaseInt
+
+                if (stockCompExistente) {
+                  const saldoFilaCompInt = normalizeVolumenInt(stockCompExistente.saldo_actual, factorVolumen)
+                  const nuevoSaldoFilaCompInt = saldoFilaCompInt - cantCompBaseInt
+                  await tx
+                    .update(schema.stock_actual)
+                    .set({
+                      saldo_actual: nuevoSaldoFilaCompInt,
+                      updated_at: sql`NOW()`
+                    })
+                    .where(eq(schema.stock_actual.id, stockCompExistente.id))
+                } else {
+                  await tx.insert(schema.stock_actual).values({
+                    branch_id: branchId,
+                    almacen_id: almacen.id,
+                    producto_id: comp.comp_producto_uuid,
+                    presentacion_id: comp.presentacion_componente_id,
+                    lotes_id: null,
+                    saldo_actual: 0 - cantCompBaseInt,
+                    updated_at: sql`NOW()`
+                  })
+                }
+
+                // Registrar movimiento histórico (Kárdex) en tabla stock para el componente
+                const [movStock] = await tx
+                  .insert(schema.stock)
+                  .values({
+                    producto_id: comp.comp_producto_uuid,
+                    presentacion_id: comp.presentacion_componente_id,
+                    lotes_id: null,
+                    cantidad: cantCompInt,
+                    multiplica_por: multiplicaComp,
+                    cantidad_base: cantCompBaseInt,
+                    saldo: nuevoSaldoBaseCompInt,
+                    documento_id: nuevaVenta.id,
+                    documento: numeroComprobante,
+                    tipo_mov: 2, // Salida por venta
+                    concepto: `VENTA COMBO (${item.nombre_completo || 'COMBO'}) - ${numeroComprobante}`,
+                    usuario_id: usuarioId,
+                    branch_id: branchId,
+                    almacen_id: almacen.id
+                  })
+                  .returning({ id: schema.stock.id })
+
+                // Costos snapshots
+                const costoUnitarioBase = (Number(comp.comp_precio_costo || 0) / (factorPrecio * multiplicaComp)).toFixed(6)
+                const costoTotalSnapshot = Math.round(Number(costoUnitarioBase) * cantCompTotalBaseVisual * factorPrecio)
+                const precioProporcionalHistorico = Math.round(Number(comp.precio_final || 0) * cantVisual)
+
+                // Registrar en combo_detalle_ventas
+                await tx.insert(schema.combo_detalle_ventas).values({
+                  branch_id: branchId,
+                  detalle_venta_id: nuevoDetalleVenta.id,
+                  producto_componente_id: comp.comp_producto_uuid,
+                  presentacion_componente_id: comp.presentacion_componente_id,
+                  producto_nombre_snapshot: comp.prod_nombre || 'COMPONENTE',
+                  presentacion_nombre_snapshot: comp.comp_nombre || 'UNIDAD',
+                  lote_id: null,
+                  stock_movimiento_id: movStock.id,
+                  cantidad_base: cantCompBaseInt,
+                  multiplica_por_snapshot: multiplicaComp,
+                  costo_unitario_base_snapshot: String(costoUnitarioBase),
+                  costo_total_snapshot: costoTotalSnapshot,
+                  precio_proporcional_historico: precioProporcionalHistorico
+                })
+              }
+            }
+          } else {
+            // PRODUCTO INDIVIDUAL: Actualizar stock_actual de este producto e insertar Kárdex
+            if (almacen && item.producto_id && presId) {
+              const stockProductoRows = await tx
+                .select()
+                .from(schema.stock_actual)
+                .where(
+                  and(
+                    eq(schema.stock_actual.branch_id, branchId),
+                    eq(schema.stock_actual.almacen_id, almacen.id),
+                    eq(schema.stock_actual.producto_id, item.producto_id)
+                  )
+                )
+                .for('update')
+
+              const saldoBaseAnteriorInt = stockProductoRows.reduce(
+                (acc, r) => acc + normalizeVolumenInt(r.saldo_actual, factorVolumen),
+                0
+              )
+              const stockExistente = stockProductoRows.find(
+                (r) => r.presentacion_id === presId
+              )
+
+              const nuevoSaldoBaseTotalInt = saldoBaseAnteriorInt - cantidadBaseInt
+
+              if (stockExistente) {
+                const saldoFilaActualInt = normalizeVolumenInt(stockExistente.saldo_actual, factorVolumen)
+                const nuevoSaldoFilaInt = saldoFilaActualInt - cantidadBaseInt
+                await tx
+                  .update(schema.stock_actual)
+                  .set({
+                    saldo_actual: nuevoSaldoFilaInt,
+                    updated_at: sql`NOW()`
+                  })
+                  .where(eq(schema.stock_actual.id, stockExistente.id))
+              } else {
+                await tx.insert(schema.stock_actual).values({
+                  branch_id: branchId,
+                  almacen_id: almacen.id,
+                  producto_id: item.producto_id,
+                  presentacion_id: presId,
+                  lotes_id: null,
+                  saldo_actual: 0 - cantidadBaseInt,
                   updated_at: sql`NOW()`
                 })
-                .where(eq(schema.stock_actual.id, stockExistente.id))
-            } else {
-              await tx.insert(schema.stock_actual).values({
-                branch_id: branchId,
-                almacen_id: almacen.id,
+              }
+
+              // Registrar movimiento histórico (Kárdex) en tabla stock (tipo_mov: 2 = Salida)
+              await tx.insert(schema.stock).values({
                 producto_id: item.producto_id,
                 presentacion_id: presId,
                 lotes_id: null,
-                saldo_actual: 0 - cantidadBaseInt,
-                updated_at: sql`NOW()`
+                cantidad: cantInt,
+                multiplica_por: multiplicaPor,
+                cantidad_base: cantidadBaseInt,
+                saldo: nuevoSaldoBaseTotalInt,
+                documento_id: nuevaVenta.id,
+                documento: numeroComprobante,
+                tipo_mov: 2,
+                concepto: `VENTA - ${numeroComprobante}`,
+                usuario_id: usuarioId,
+                branch_id: branchId,
+                almacen_id: almacen.id
               })
             }
-
-            // Registrar movimiento histórico (Kárdex) en tabla stock (tipo_mov: 2 = Salida)
-            await tx.insert(schema.stock).values({
-              producto_id: item.producto_id,
-              presentacion_id: presId,
-              lotes_id: null,
-              cantidad: cantInt,
-              multiplica_por: multiplicaPor,
-              cantidad_base: cantidadBaseInt,
-              saldo: nuevoSaldoBaseTotalInt,
-              documento_id: nuevaVenta.id,
-              documento: numeroComprobante,
-              tipo_mov: 2,
-              concepto: `VENTA - ${numeroComprobante}`,
-              usuario_id: usuarioId,
-              branch_id: branchId,
-              almacen_id: almacen.id
-            })
           }
         }
 
@@ -784,78 +960,159 @@ async function ventasRoutes(fastify) {
           for (const det of detalles) {
             if (!det.producto_id || !det.presentacion_id) continue
 
-            const [pres] = await tx
-              .select({ multiplica_por: schema.presentaciones.multiplica_por })
-              .from(schema.presentaciones)
-              .where(eq(schema.presentaciones.id, det.presentacion_id))
-              .limit(1)
-
-            const multiplicaPor = Math.max(1, Number(pres?.multiplica_por || 1))
-            const cantInt = normalizeVolumenInt(det.cantidad, factorVolumen)
-            const cantidadBaseInt = cantInt * multiplicaPor
-
-            const stockProductoRows = await tx
+            // Verificar si el detalle tiene desglose en combo_detalle_ventas
+            const componentesVenta = await tx
               .select()
-              .from(schema.stock_actual)
-              .where(
-                and(
-                  eq(schema.stock_actual.branch_id, venta.branch_id),
-                  eq(schema.stock_actual.almacen_id, almacen.id),
-                  eq(schema.stock_actual.producto_id, det.producto_id)
+              .from(schema.combo_detalle_ventas)
+              .where(eq(schema.combo_detalle_ventas.detalle_venta_id, det.id))
+
+            if (componentesVenta.length > 0) {
+              // Revertir stock de cada producto componente
+              for (const comp of componentesVenta) {
+                if (!comp.producto_componente_id || !comp.presentacion_componente_id) continue
+
+                const cantBaseCompInt = normalizeVolumenInt(comp.cantidad_base, factorVolumen)
+                const multiplicaComp = Math.max(1, Number(comp.multiplica_por_snapshot || 1))
+                const cantCompInt = Math.round(cantBaseCompInt / multiplicaComp)
+
+                const stockCompRows = await tx
+                  .select()
+                  .from(schema.stock_actual)
+                  .where(
+                    and(
+                      eq(schema.stock_actual.branch_id, venta.branch_id),
+                      eq(schema.stock_actual.almacen_id, almacen.id),
+                      eq(schema.stock_actual.producto_id, comp.producto_componente_id)
+                    )
+                  )
+                  .for('update')
+
+                const saldoCompAnteriorInt = stockCompRows.reduce(
+                  (acc, r) => acc + normalizeVolumenInt(r.saldo_actual, factorVolumen),
+                  0
                 )
+                const stockCompExistente = stockCompRows.find(
+                  (r) => r.presentacion_id === comp.presentacion_componente_id
+                )
+
+                const nuevoSaldoBaseCompInt = saldoCompAnteriorInt + cantBaseCompInt
+
+                if (stockCompExistente) {
+                  const saldoFilaCompInt = normalizeVolumenInt(stockCompExistente.saldo_actual, factorVolumen)
+                  const nuevoSaldoFilaCompInt = saldoFilaCompInt + cantBaseCompInt
+                  await tx
+                    .update(schema.stock_actual)
+                    .set({
+                      saldo_actual: nuevoSaldoFilaCompInt,
+                      updated_at: sql`NOW()`
+                    })
+                    .where(eq(schema.stock_actual.id, stockCompExistente.id))
+                } else {
+                  await tx.insert(schema.stock_actual).values({
+                    branch_id: venta.branch_id,
+                    almacen_id: almacen.id,
+                    producto_id: comp.producto_componente_id,
+                    presentacion_id: comp.presentacion_componente_id,
+                    lotes_id: null,
+                    saldo_actual: cantBaseCompInt,
+                    updated_at: sql`NOW()`
+                  })
+                }
+
+                await tx.insert(schema.stock).values({
+                  producto_id: comp.producto_componente_id,
+                  presentacion_id: comp.presentacion_componente_id,
+                  lotes_id: null,
+                  cantidad: cantCompInt,
+                  multiplica_por: multiplicaComp,
+                  cantidad_base: cantBaseCompInt,
+                  saldo: nuevoSaldoBaseCompInt,
+                  documento_id: venta.id,
+                  documento: numeroComprobante,
+                  tipo_mov: 1, // Entrada por anulación
+                  concepto: motivo
+                    ? `ANULACIÓN VENTA COMBO - ${numeroComprobante} (${motivo})`
+                    : `ANULACIÓN VENTA COMBO - ${numeroComprobante}`,
+                  usuario_id: usuarioId,
+                  branch_id: venta.branch_id,
+                  almacen_id: almacen.id
+                })
+              }
+            } else {
+              // Producto individual estándar
+              const [pres] = await tx
+                .select({ multiplica_por: schema.presentaciones.multiplica_por })
+                .from(schema.presentaciones)
+                .where(eq(schema.presentaciones.id, det.presentacion_id))
+                .limit(1)
+
+              const multiplicaPor = Math.max(1, Number(pres?.multiplica_por || 1))
+              const cantInt = normalizeVolumenInt(det.cantidad, factorVolumen)
+              const cantidadBaseInt = cantInt * multiplicaPor
+
+              const stockProductoRows = await tx
+                .select()
+                .from(schema.stock_actual)
+                .where(
+                  and(
+                    eq(schema.stock_actual.branch_id, venta.branch_id),
+                    eq(schema.stock_actual.almacen_id, almacen.id),
+                    eq(schema.stock_actual.producto_id, det.producto_id)
+                  )
+                )
+                .for('update')
+
+              const saldoBaseAnteriorInt = stockProductoRows.reduce(
+                (acc, r) => acc + normalizeVolumenInt(r.saldo_actual, factorVolumen),
+                0
               )
-              .for('update')
+              const stockExistente = stockProductoRows.find(
+                (r) => r.presentacion_id === det.presentacion_id
+              )
 
-            const saldoBaseAnteriorInt = stockProductoRows.reduce(
-              (acc, r) => acc + normalizeVolumenInt(r.saldo_actual, factorVolumen),
-              0
-            )
-            const stockExistente = stockProductoRows.find(
-              (r) => r.presentacion_id === det.presentacion_id
-            )
+              const nuevoSaldoBaseTotalInt = saldoBaseAnteriorInt + cantidadBaseInt
 
-            const nuevoSaldoBaseTotalInt = saldoBaseAnteriorInt + cantidadBaseInt
-
-            if (stockExistente) {
-              const saldoFilaActualInt = normalizeVolumenInt(stockExistente.saldo_actual, factorVolumen)
-              const nuevoSaldoFilaInt = saldoFilaActualInt + cantidadBaseInt
-              await tx
-                .update(schema.stock_actual)
-                .set({
-                  saldo_actual: nuevoSaldoFilaInt,
+              if (stockExistente) {
+                const saldoFilaActualInt = normalizeVolumenInt(stockExistente.saldo_actual, factorVolumen)
+                const nuevoSaldoFilaInt = saldoFilaActualInt + cantidadBaseInt
+                await tx
+                  .update(schema.stock_actual)
+                  .set({
+                    saldo_actual: nuevoSaldoFilaInt,
+                    updated_at: sql`NOW()`
+                  })
+                  .where(eq(schema.stock_actual.id, stockExistente.id))
+              } else {
+                await tx.insert(schema.stock_actual).values({
+                  branch_id: venta.branch_id,
+                  almacen_id: almacen.id,
+                  producto_id: det.producto_id,
+                  presentacion_id: det.presentacion_id,
+                  lotes_id: null,
+                  saldo_actual: cantidadBaseInt,
                   updated_at: sql`NOW()`
                 })
-                .where(eq(schema.stock_actual.id, stockExistente.id))
-            } else {
-              await tx.insert(schema.stock_actual).values({
-                branch_id: venta.branch_id,
-                almacen_id: almacen.id,
+              }
+
+              await tx.insert(schema.stock).values({
                 producto_id: det.producto_id,
                 presentacion_id: det.presentacion_id,
                 lotes_id: null,
-                saldo_actual: cantidadBaseInt,
-                updated_at: sql`NOW()`
+                cantidad: cantInt,
+                multiplica_por: multiplicaPor,
+                cantidad_base: cantidadBaseInt,
+                saldo: nuevoSaldoBaseTotalInt,
+                documento_id: venta.id,
+                documento: numeroComprobante,
+                tipo_mov: 1,
+                concepto: motivo
+                  ? `ANULACIÓN VENTA - ${numeroComprobante} (${motivo})`
+                  : `ANULACIÓN VENTA - ${numeroComprobante}`,
+                usuario_id: usuarioId,
+                branch_id: venta.branch_id,
+                almacen_id: almacen.id
               })
             }
-
-            await tx.insert(schema.stock).values({
-              producto_id: det.producto_id,
-              presentacion_id: det.presentacion_id,
-              lotes_id: null,
-              cantidad: cantInt,
-              multiplica_por: multiplicaPor,
-              cantidad_base: cantidadBaseInt,
-              saldo: nuevoSaldoBaseTotalInt,
-              documento_id: venta.id,
-              documento: numeroComprobante,
-              tipo_mov: 1,
-              concepto: motivo
-                ? `ANULACIÓN VENTA - ${numeroComprobante} (${motivo})`
-                : `ANULACIÓN VENTA - ${numeroComprobante}`,
-              usuario_id: usuarioId,
-              branch_id: venta.branch_id,
-              almacen_id: almacen.id
-            })
           }
         }
       })

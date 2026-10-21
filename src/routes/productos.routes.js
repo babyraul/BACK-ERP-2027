@@ -145,14 +145,133 @@ async function productosRoutes(fastify) {
       }
     })
 
+    // Para productos combo: calcular stock y precio virtual a partir de combo_detalles y stock de componentes
+    const comboPresIds = presentacionesRows
+      .filter((pr) => {
+        const prodPadre = productosRows.find((p) => p.id === pr.producto_uuid)
+        return prodPadre && prodPadre.es_combo
+      })
+      .map((pr) => pr.id)
+
+    const comboDetallesMap = {}
+    if (comboPresIds.length > 0) {
+      const comboDetallesRows = await db
+        .select({
+          presentacion_combo_id: schema.combo_detalles.presentacion_combo_id,
+          presentacion_componente_id: schema.combo_detalles.presentacion_componente_id,
+          cantidad: schema.combo_detalles.cantidad,
+          tipo_ajuste: schema.combo_detalles.tipo_ajuste,
+          valor_ajuste: schema.combo_detalles.valor_ajuste,
+          precio_final: schema.combo_detalles.precio_final,
+          comp_multiplica_por: schema.presentaciones.multiplica_por,
+          comp_precio_costo: schema.presentaciones.precio_costo,
+          comp_precio_venta: schema.presentaciones.precio_venta,
+          comp_producto_uuid: schema.presentaciones.producto_uuid
+        })
+        .from(schema.combo_detalles)
+        .leftJoin(
+          schema.presentaciones,
+          eq(schema.combo_detalles.presentacion_componente_id, schema.presentaciones.id)
+        )
+        .where(
+          and(
+            inArray(schema.combo_detalles.presentacion_combo_id, comboPresIds),
+            eq(schema.combo_detalles.activo, true)
+          )
+        )
+
+      // Cargar stock de productos componentes si no se cargaron previamente
+      const compProdIds = Array.from(new Set(comboDetallesRows.map((d) => d.comp_producto_uuid).filter(Boolean)))
+      const compProdIdsFaltantes = compProdIds.filter((cId) => stockPorProd[cId] === undefined)
+      if (compProdIdsFaltantes.length > 0) {
+        const compStockConds = [inArray(schema.stock_actual.producto_id, compProdIdsFaltantes)]
+        if (branchId) {
+          compStockConds.push(eq(schema.stock_actual.branch_id, branchId))
+        }
+        const compStockRows = await db
+          .select()
+          .from(schema.stock_actual)
+          .where(and(...compStockConds))
+
+        compStockRows.forEach((s) => {
+          const saldo = toVolumenVisual(s.saldo_actual, factorVolumen)
+          if (s.producto_id) {
+            stockPorProd[s.producto_id] = Number(((stockPorProd[s.producto_id] || 0) + saldo).toFixed(4))
+          }
+        })
+      }
+
+      comboDetallesRows.forEach((cd) => {
+        if (!comboDetallesMap[cd.presentacion_combo_id]) {
+          comboDetallesMap[cd.presentacion_combo_id] = []
+        }
+        comboDetallesMap[cd.presentacion_combo_id].push(cd)
+      })
+    }
+
     // Mapear presentaciones por producto convirtiendo de entero (BD) a decimal visual
     // El stock de cada presentación se calcula a partir del stock base total del producto dividido por su multiplica_por
+    // Para combos: se calcula dinámicamente como el mínimo stock disponible entre sus componentes
     const presMap = {}
     presentacionesRows.forEach(pres => {
       if (!presMap[pres.producto_uuid]) presMap[pres.producto_uuid] = []
+      const prodPadre = productosRows.find((p) => p.id === pres.producto_uuid)
+      const esCombo = Boolean(prodPadre && prodPadre.es_combo)
+
+      let stockPres = 0
+      let precioVentaCalculado = Number(pres.precio_venta || 0) / factorPrecio
+      let precioCostoCalculado = Number(pres.precio_costo || 0) / factorPrecio
+
+      if (esCombo) {
+        const detalles = comboDetallesMap[pres.id] || []
+        let stockComboMin = detalles.length > 0 ? Infinity : 0
+        let precioAcumuladoVisual = 0
+        let costoAcumuladoVisual = 0
+
+        detalles.forEach((det) => {
+          const cantReq = Math.max(1, Number(det.cantidad || 1))
+          const multiplicaComp = Math.max(1, Number(det.comp_multiplica_por || 1))
+          const saldoBaseComp = Number(stockPorProd[det.comp_producto_uuid] || 0)
+          const stockPresentacionComp = calcularStockPresentacion(saldoBaseComp, multiplicaComp)
+          const disp = Math.floor(stockPresentacionComp / cantReq)
+          if (disp < stockComboMin) {
+            stockComboMin = disp
+          }
+
+          const costoUnit = Number(det.comp_precio_costo || 0) / factorPrecio
+          const ventaUnit = Number(det.comp_precio_venta || 0) / factorPrecio
+          const tipoAjuste = det.tipo_ajuste || 'MARGEN'
+          const valorAjuste = Number(det.valor_ajuste || 0)
+
+          let precioFinalUnit = 0
+          if (tipoAjuste === 'MARGEN') {
+            precioFinalUnit = costoUnit + (costoUnit * valorAjuste) / 100
+          } else {
+            precioFinalUnit = ventaUnit - valorAjuste
+          }
+          if (precioFinalUnit < 0) precioFinalUnit = 0
+          precioFinalUnit = Math.floor(precioFinalUnit * 1000) / 1000
+
+          precioAcumuladoVisual += precioFinalUnit * cantReq
+          costoAcumuladoVisual += costoUnit * cantReq
+        })
+
+        stockPres = stockComboMin === Infinity ? 0 : stockComboMin
+        stockPorProd[pres.producto_uuid] = stockPres
+        if (precioAcumuladoVisual > 0) {
+          precioVentaCalculado = Number(precioAcumuladoVisual.toFixed(2))
+        }
+        if (costoAcumuladoVisual > 0) {
+          precioCostoCalculado = Number(costoAcumuladoVisual.toFixed(2))
+        }
+      } else {
+        const multiplicaPor = Math.max(1, Number(pres.multiplica_por || 1))
+        const saldoBaseTotal = Number(stockPorProd[pres.producto_uuid] || 0)
+        stockPres = calcularStockPresentacion(saldoBaseTotal, multiplicaPor)
+      }
+
       const multiplicaPor = Math.max(1, Number(pres.multiplica_por || 1))
       const saldoBaseTotal = Number(stockPorProd[pres.producto_uuid] || 0)
-      const stockPres = calcularStockPresentacion(saldoBaseTotal, multiplicaPor)
       const presUnidad = pres.unidad_medida_id || null
 
       presMap[pres.producto_uuid].push({
@@ -165,8 +284,8 @@ async function productosRoutes(fastify) {
         stock_actual: stockPres,
         stock_base_producto: saldoBaseTotal,
         // Conversión con factor de precio (céntimos -> decimal)
-        precio_costo: Number(pres.precio_costo || 0) / factorPrecio,
-        precio_venta: Number(pres.precio_venta || 0) / factorPrecio,
+        precio_costo: precioCostoCalculado,
+        precio_venta: precioVentaCalculado,
         precio_mayor: Number(pres.precio_mayor || 0) / factorPrecio,
         precio_especial: Number(pres.precio_especial || 0) / factorPrecio,
         precio_otros: Number(pres.precio_otros || 0) / factorPrecio,
