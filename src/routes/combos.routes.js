@@ -3,7 +3,7 @@
 const { db } = require('../db')
 const schema = require('../db/schema')
 const { eq, and, or, ilike, desc, sql, inArray } = require('drizzle-orm')
-const { getFactores, calcularStockPresentacion } = require('../utils/factores')
+const { getFactores, calcularStockPresentacion, toVolumenVisual } = require('../utils/factores')
 
 /**
  * Módulo de Combos Promocionales
@@ -31,7 +31,7 @@ async function combosRoutes(fastify) {
       const empresaId = request.user?.empresa_id || request.user?.branch_id
       const branchId = request.user?.branch_id
 
-      const { factorPrecio } = await getFactores()
+      const { factorPrecio, factorVolumen } = await getFactores()
 
       // Condiciones para filtrar productos que sean combos
       const conditions = [eq(schema.productos.es_combo, true)]
@@ -136,29 +136,31 @@ async function combosRoutes(fastify) {
           )
       }
 
-      // 4. Obtener stocks de los productos componentes en la sucursal activa
+      // 4. Obtener stocks de los productos componentes y de los propios combos en la sucursal activa
       const componenteProdIds = Array.from(
         new Set(detallesRows.map((d) => d.comp_producto_uuid).filter(Boolean))
       )
+      const allProdIdsParaStock = Array.from(new Set([...componenteProdIds, ...comboIds]))
       const stockPorProd = {}
 
-      if (componenteProdIds.length > 0 && branchId) {
+      if (allProdIdsParaStock.length > 0) {
+        const stockConds = [inArray(schema.stock_actual.producto_id, allProdIdsParaStock)]
+        if (branchId) {
+          stockConds.push(eq(schema.stock_actual.branch_id, branchId))
+        }
+
         const stockActualRows = await db
           .select({
             producto_id: schema.stock_actual.producto_id,
             saldo_actual: schema.stock_actual.saldo_actual
           })
           .from(schema.stock_actual)
-          .where(
-            and(
-              eq(schema.stock_actual.branch_id, branchId),
-              inArray(schema.stock_actual.producto_id, componenteProdIds)
-            )
-          )
+          .where(and(...stockConds))
 
         stockActualRows.forEach((row) => {
+          const saldo = toVolumenVisual(row.saldo_actual, factorVolumen)
           stockPorProd[row.producto_id] =
-            (stockPorProd[row.producto_id] || 0) + Number(row.saldo_actual || 0)
+            Number(((stockPorProd[row.producto_id] || 0) + saldo).toFixed(4))
         })
       }
 
@@ -242,6 +244,9 @@ async function combosRoutes(fastify) {
             ? Number(pres.precio_venta) / factorPrecio
             : Math.floor((precioAcumuladoCentimos / factorPrecio) * 100) / 100
 
+        const saldoCombo = stockPorProd[combo.id] || 0
+        const ventasCombo = Math.abs(saldoCombo < 0 ? saldoCombo : 0)
+
         return {
           id: combo.id,
           IdCombo: combo.id,
@@ -253,8 +258,11 @@ async function combosRoutes(fastify) {
           descripcion: combo.descripcion,
           activo: combo.activo,
           Estado: combo.Estado,
-          stock: Math.max(0, stockDisponible),
-          Stock: Math.max(0, stockDisponible),
+          stock: saldoCombo,
+          Stock: saldoCombo,
+          stock_actual: saldoCombo,
+          ventas_totales: ventasCombo,
+          stock_disponible: Math.max(0, stockDisponible),
           precio: precioTotalSoles,
           Precio: precioTotalSoles,
           total_items: itemsEnriquecidos.length,

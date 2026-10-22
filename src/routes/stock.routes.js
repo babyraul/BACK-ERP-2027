@@ -622,6 +622,387 @@ async function stockRoutes(fastify) {
       }
     }
   )
+
+  // ── 5. POST /api/stock/reiniciar-masivo ──────────────────────────────────────────
+  // Reinicia masivamente a 0 el stock_actual y genera los movimientos de compensación en kardex (tabla stock)
+  fastify.post(
+    '/reiniciar-masivo',
+    {
+      config: {
+        permission: ['stock.editar', 'kardexprod.editar']
+      }
+    },
+    async (request, reply) => {
+      try {
+        const { almacen_id, motivo, tipo_saldo = 'todos' } = request.body || {}
+        const branchId = request.user?.branch_id
+        const usuarioId = request.user?.id
+
+        if (!branchId) {
+          return reply.code(400).send({
+            success: false,
+            message: 'El usuario no cuenta con una sucursal activa en su sesión.'
+          })
+        }
+
+        const { factorVolumen } = await getFactores()
+
+        // Ejecutar reinicio de forma transaccional y atómica
+        const resultado = await db.transaction(async (tx) => {
+          // 1. Obtener filas de stock_actual con saldo según tipo_saldo ('todos' | 'solo_negativos' | 'solo_positivos')
+          const stockConds = [eq(schema.stock_actual.branch_id, branchId)]
+
+          if (tipo_saldo === 'solo_negativos') {
+            stockConds.push(sql`${schema.stock_actual.saldo_actual} < 0`)
+          } else if (tipo_saldo === 'solo_positivos') {
+            stockConds.push(sql`${schema.stock_actual.saldo_actual} > 0`)
+          } else {
+            stockConds.push(sql`${schema.stock_actual.saldo_actual} != 0`)
+          }
+
+          if (almacen_id) {
+            stockConds.push(eq(schema.stock_actual.almacen_id, almacen_id))
+          }
+
+          const filasConStock = await tx
+            .select()
+            .from(schema.stock_actual)
+            .where(and(...stockConds))
+            .for('update')
+
+          if (filasConStock.length === 0) {
+            const filtroTexto =
+              tipo_saldo === 'solo_negativos'
+                ? 'en stock negativo'
+                : tipo_saldo === 'solo_positivos'
+                  ? 'en stock positivo'
+                  : 'con saldo distinto de 0'
+            return {
+              afectados: 0,
+              total_regularizados: 0,
+              message: `No hay productos ${filtroTexto} para reiniciar en este almacén/sucursal.`
+            }
+          }
+
+          // Pre-cargar multiplicadores de presentaciones
+          const presIds = Array.from(new Set(filasConStock.map((f) => f.presentacion_id).filter(Boolean)))
+          let presMultiplicaMap = {}
+          if (presIds.length > 0) {
+            const presRows = await tx
+              .select({
+                id: schema.presentaciones.id,
+                multiplica_por: schema.presentaciones.multiplica_por
+              })
+              .from(schema.presentaciones)
+              .where(inArray(schema.presentaciones.id, presIds))
+
+            presRows.forEach((pr) => {
+              presMultiplicaMap[pr.id] = Math.max(1, Number(pr.multiplica_por || 1))
+            })
+          }
+
+          const docRef = 'REINICIO-MASIVO'
+          const tipoTexto =
+            tipo_saldo === 'solo_negativos'
+              ? 'REINICIO MASIVO (SOLO NEGATIVOS)'
+              : tipo_saldo === 'solo_positivos'
+                ? 'REINICIO MASIVO (SOLO POSITIVOS)'
+                : 'REINICIO MASIVO DE STOCK'
+          const conceptoRef = (motivo && motivo.trim()) || tipoTexto
+
+          const idsAfectados = []
+
+          // 2. Por cada fila de stock_actual seleccionada:
+          //    - Registrar el movimiento de regularización en tabla `stock` para dejar el saldo en 0
+          for (const fila of filasConStock) {
+            const saldoFilaInt = normalizeVolumenInt(fila.saldo_actual, factorVolumen)
+            if (saldoFilaInt === 0) continue
+
+            idsAfectados.push(fila.id)
+            const multiplicaPor = presMultiplicaMap[fila.presentacion_id] || 1
+            const tipoMov = saldoFilaInt > 0 ? 2 : 1 // Salida si había positivo, Entrada si había negativo
+            const cantBaseAbsInt = Math.abs(saldoFilaInt)
+            const cantAbsInt = Math.round(cantBaseAbsInt / multiplicaPor)
+
+            await tx.insert(schema.stock).values({
+              producto_id: fila.producto_id,
+              presentacion_id: fila.presentacion_id,
+              lotes_id: fila.lotes_id || null,
+              cantidad: cantAbsInt,
+              multiplica_por: multiplicaPor,
+              cantidad_base: cantBaseAbsInt,
+              saldo: 0, // Saldo final restaurado a 0
+              documento_id: null,
+              documento: docRef,
+              tipo_mov: tipoMov,
+              concepto: `${conceptoRef} (Ajuste de ${toVolumenVisual(cantBaseAbsInt, factorVolumen)} un)`,
+              usuario_id: usuarioId,
+              branch_id: branchId,
+              almacen_id: fila.almacen_id
+            })
+          }
+
+          // 3. Poner en 0 únicamente las filas específicas afectadas
+          if (idsAfectados.length > 0) {
+            await tx
+              .update(schema.stock_actual)
+              .set({
+                saldo_actual: 0,
+                updated_at: sql`NOW()`
+              })
+              .where(inArray(schema.stock_actual.id, idsAfectados))
+          }
+
+          return {
+            afectados: idsAfectados.length,
+            total_regularizados: idsAfectados.length,
+            message: `Se han reiniciado ${idsAfectados.length} registros de stock a 0 correctamente.`
+          }
+        })
+
+        return reply.code(200).send({
+          success: true,
+          message: resultado.message,
+          data: resultado
+        })
+      } catch (error) {
+        request.log.error(error)
+        return reply.code(500).send({
+          success: false,
+          message: 'Error al reiniciar stock masivamente: ' + error.message
+        })
+      }
+    }
+  )
+
+  // ── 6. POST /api/stock/carga-masiva ─────────────────────────────────────────────
+  // Carga e inventario masivo en presentación principal (Enfoque 1: Unidad Base)
+  // Actualiza stock_actual e inserta el movimiento compensatorio en kárdex (tabla stock)
+  fastify.post(
+    '/carga-masiva',
+    {
+      config: {
+        permission: ['stock.crear', 'stock.editar', 'kardexprod.crear', 'kardexprod.editar']
+      }
+    },
+    async (request, reply) => {
+      try {
+        const {
+          almacen_id,
+          modo = 'conteo_fisico', // 'conteo_fisico' (nuevo stock exacto) | 'incremento' (sumar al actual)
+          motivo,
+          items = [] // array de { producto_id, presentacion_id, cantidad }
+        } = request.body || {}
+
+        const branchId = request.user?.branch_id
+        const usuarioId = request.user?.id
+
+        if (!branchId) {
+          return reply.code(400).send({
+            success: false,
+            message: 'El usuario no cuenta con una sucursal activa en su sesión.'
+          })
+        }
+
+        if (!Array.isArray(items) || items.length === 0) {
+          return reply.code(400).send({
+            success: false,
+            message: 'Debe enviar al menos un producto para la carga masiva.'
+          })
+        }
+
+        const { factorVolumen } = await getFactores()
+
+        const resultado = await db.transaction(async (tx) => {
+          // 1. Resolver almacén objetivo
+          let targetAlmacenId = almacen_id
+          if (!targetAlmacenId) {
+            const [alm] = await tx
+              .select({ id: schema.almacenes.id })
+              .from(schema.almacenes)
+              .where(and(eq(schema.almacenes.branch_id, branchId), eq(schema.almacenes.activo, true)))
+              .orderBy(desc(schema.almacenes.es_principal))
+              .limit(1)
+
+            if (alm) {
+              targetAlmacenId = alm.id
+            } else {
+              const [nuevoAlm] = await tx
+                .insert(schema.almacenes)
+                .values({
+                  branch_id: branchId,
+                  nombre: 'ALMACÉN PRINCIPAL',
+                  codigo: 'ALM-01',
+                  es_principal: true,
+                  activo: true
+                })
+                .returning({ id: schema.almacenes.id })
+              targetAlmacenId = nuevoAlm.id
+            }
+          }
+
+          const docRef = 'CARGA-MASIVA'
+          const conceptoRef =
+            (motivo && motivo.trim()) ||
+            (modo === 'incremento'
+              ? 'INGRESO MASIVO DE STOCK'
+              : 'TOMA DE INVENTARIO FÍSICO / CARGA MASIVA')
+
+          let totalActualizados = 0
+
+          for (const item of items) {
+            const prodId = item.producto_id
+            if (!prodId) continue
+
+            const cantVisual = Number(item.cantidad)
+            if (isNaN(cantVisual) || cantVisual < 0) continue
+
+            // Obtener o resolver la presentación principal (multiplica_por = 1 o la primera)
+            let presId = item.presentacion_id
+            let multiplicaPor = 1
+
+            if (presId) {
+              const [pInfo] = await tx
+                .select({ multiplica_por: schema.presentaciones.multiplica_por })
+                .from(schema.presentaciones)
+                .where(eq(schema.presentaciones.id, presId))
+                .limit(1)
+              multiplicaPor = Math.max(1, Number(pInfo?.multiplica_por || 1))
+            } else {
+              // Buscar presentación principal del producto
+              const [pInfo] = await tx
+                .select({
+                  id: schema.presentaciones.id,
+                  multiplica_por: schema.presentaciones.multiplica_por
+                })
+                .from(schema.presentaciones)
+                .where(eq(schema.presentaciones.producto_uuid, prodId))
+                .orderBy(schema.presentaciones.multiplica_por, schema.presentaciones.created_at)
+                .limit(1)
+
+              if (pInfo) {
+                presId = pInfo.id
+                multiplicaPor = Math.max(1, Number(pInfo.multiplica_por || 1))
+              } else {
+                // Si el producto no tiene presentación, crearla
+                const [nuevaPres] = await tx
+                  .insert(schema.presentaciones)
+                  .values({
+                    producto_uuid: prodId,
+                    nombre: 'UNIDAD',
+                    multiplica_por: 1
+                  })
+                  .returning()
+                presId = nuevaPres.id
+                multiplicaPor = 1
+              }
+            }
+
+            // Consultar saldo actual de la fila en stock_actual con bloqueo pesimista
+            const [stockExistente] = await tx
+              .select()
+              .from(schema.stock_actual)
+              .where(
+                and(
+                  eq(schema.stock_actual.branch_id, branchId),
+                  eq(schema.stock_actual.almacen_id, targetAlmacenId),
+                  eq(schema.stock_actual.producto_id, prodId),
+                  eq(schema.stock_actual.presentacion_id, presId)
+                )
+              )
+              .for('update')
+
+            const saldoAnteriorInt = stockExistente
+              ? normalizeVolumenInt(stockExistente.saldo_actual, factorVolumen)
+              : 0
+
+            let nuevoSaldoInt = 0
+            let deltaInt = 0
+
+            if (modo === 'incremento') {
+              // Modo incremento: suma la cantidad ingresada al saldo existente
+              const deltaBaseVisual = cantVisual * multiplicaPor
+              deltaInt = toVolumenInt(deltaBaseVisual, factorVolumen)
+              nuevoSaldoInt = saldoAnteriorInt + deltaInt
+            } else {
+              // Modo conteo físico: el número ingresado es el nuevo saldo total
+              const nuevoSaldoBaseVisual = cantVisual * multiplicaPor
+              nuevoSaldoInt = toVolumenInt(nuevoSaldoBaseVisual, factorVolumen)
+              deltaInt = nuevoSaldoInt - saldoAnteriorInt
+            }
+
+            // Si no hay diferencia de inventario en conteo físico, omitir
+            if (deltaInt === 0 && stockExistente) {
+              continue
+            }
+
+            // A. Actualizar o insertar en stock_actual
+            if (stockExistente) {
+              await tx
+                .update(schema.stock_actual)
+                .set({
+                  saldo_actual: nuevoSaldoInt,
+                  updated_at: sql`NOW()`
+                })
+                .where(eq(schema.stock_actual.id, stockExistente.id))
+            } else {
+              await tx.insert(schema.stock_actual).values({
+                branch_id: branchId,
+                almacen_id: targetAlmacenId,
+                producto_id: prodId,
+                presentacion_id: presId,
+                lotes_id: null,
+                saldo_actual: nuevoSaldoInt,
+                updated_at: sql`NOW()`
+              })
+            }
+
+            // B. Registrar movimiento compensatorio en kárdex (tabla stock)
+            const tipoMov = deltaInt >= 0 ? 1 : 2 // 1 = Entrada, 2 = Salida
+            const deltaAbsInt = Math.abs(deltaInt)
+            const deltaCantPresInt = Math.round(deltaAbsInt / multiplicaPor)
+
+            await tx.insert(schema.stock).values({
+              producto_id: prodId,
+              presentacion_id: presId,
+              lotes_id: null,
+              cantidad: deltaCantPresInt,
+              multiplica_por: multiplicaPor,
+              cantidad_base: deltaAbsInt,
+              saldo: nuevoSaldoInt,
+              documento_id: null,
+              documento: docRef,
+              tipo_mov: tipoMov,
+              concepto: `${conceptoRef} (${deltaInt >= 0 ? '+' : '-'}${toVolumenVisual(deltaAbsInt, factorVolumen)} un)`,
+              usuario_id: usuarioId,
+              branch_id: branchId,
+              almacen_id: targetAlmacenId
+            })
+
+            totalActualizados++
+          }
+
+          return {
+            total_actualizados: totalActualizados,
+            almacen_id: targetAlmacenId,
+            modo
+          }
+        })
+
+        return reply.code(200).send({
+          success: true,
+          message: `Carga masiva completada exitosamente. Se actualizaron ${resultado.total_actualizados} productos.`,
+          data: resultado
+        })
+      } catch (error) {
+        request.log.error(error)
+        return reply.code(500).send({
+          success: false,
+          message: 'Error al procesar carga masiva de stock: ' + error.message
+        })
+      }
+    }
+  )
 }
 
 module.exports = stockRoutes

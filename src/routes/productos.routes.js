@@ -2,7 +2,7 @@
 
 const { db } = require('../db')
 const schema = require('../db/schema')
-const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
+const { eq, and, or, ilike, desc, sql, inArray } = require('drizzle-orm')
 const {
   getFactores,
   toPrecioInt,
@@ -116,7 +116,6 @@ async function productosRoutes(fastify) {
     let presentacionesRows = []
     let stockActualRows = []
     if (prodIds.length > 0) {
-      const { inArray } = require('drizzle-orm')
       presentacionesRows = await db
         .select()
         .from(schema.presentaciones)
