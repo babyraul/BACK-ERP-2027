@@ -85,6 +85,7 @@ async function stockRoutes(fastify) {
           stock_minimo: schema.productos.stock_minimo,
           es_facturable: schema.productos.es_facturable,
           activo: schema.productos.activo,
+          es_combo: schema.productos.es_combo,
           categoria_id: schema.productos.categoria,
           categoria_nombre: schema.categorias.nombre,
           sub_categoria_nombre: schema.subcategoria.Nombre,
@@ -184,6 +185,7 @@ async function stockRoutes(fastify) {
               producto_id: prod.id,
               presentacion_id: pres.id,
               activo: prod.activo,
+              es_combo: Boolean(prod.es_combo),
               codigo: prod.codigo || '-',
               codigo_barra: pres.cod_barra || prod.codigo_barra || '',
               producto_nombre: prod.nombre,
@@ -215,6 +217,7 @@ async function stockRoutes(fastify) {
             producto_id: prod.id,
             presentacion_id: null,
             activo: prod.activo,
+            es_combo: Boolean(prod.es_combo),
             codigo: prod.codigo || '-',
             codigo_barra: prod.codigo_barra || '',
             producto_nombre: prod.nombre,
@@ -898,19 +901,26 @@ async function stockRoutes(fastify) {
               }
             }
 
-            // Consultar saldo actual de la fila en stock_actual con bloqueo pesimista
-            const [stockExistente] = await tx
+            // Consultar todas las filas de stock_actual de este producto en el almacén objetivo
+            const filasStockProd = await tx
               .select()
               .from(schema.stock_actual)
               .where(
                 and(
                   eq(schema.stock_actual.branch_id, branchId),
                   eq(schema.stock_actual.almacen_id, targetAlmacenId),
-                  eq(schema.stock_actual.producto_id, prodId),
-                  eq(schema.stock_actual.presentacion_id, presId)
+                  eq(schema.stock_actual.producto_id, prodId)
                 )
               )
               .for('update')
+
+            const stockExistente = filasStockProd.find((f) => f.presentacion_id === presId) || null
+
+            // Calcular saldo total actual del producto en este almacén (todas las presentaciones)
+            let saldoTotalProdInt = 0
+            filasStockProd.forEach((f) => {
+              saldoTotalProdInt += normalizeVolumenInt(f.saldo_actual, factorVolumen)
+            })
 
             const saldoAnteriorInt = stockExistente
               ? normalizeVolumenInt(stockExistente.saldo_actual, factorVolumen)
@@ -925,10 +935,26 @@ async function stockRoutes(fastify) {
               deltaInt = toVolumenInt(deltaBaseVisual, factorVolumen)
               nuevoSaldoInt = saldoAnteriorInt + deltaInt
             } else {
-              // Modo conteo físico: el número ingresado es el nuevo saldo total
+              // Modo conteo físico: el número ingresado cantVisual es el nuevo stock total deseado del producto
               const nuevoSaldoBaseVisual = cantVisual * multiplicaPor
-              nuevoSaldoInt = toVolumenInt(nuevoSaldoBaseVisual, factorVolumen)
-              deltaInt = nuevoSaldoInt - saldoAnteriorInt
+              const nuevoSaldoTotalDeseadoInt = toVolumenInt(nuevoSaldoBaseVisual, factorVolumen)
+
+              // Si existen filas secundarias con stock, sus saldos remanentes distorsionan el total del producto.
+              // Restablecer filas secundarias a 0 para que la presentación principal concentre el stock exacto.
+              const otrasFilasConStock = filasStockProd.filter((f) => f.presentacion_id !== presId && normalizeVolumenInt(f.saldo_actual, factorVolumen) !== 0)
+              if (otrasFilasConStock.length > 0) {
+                await tx
+                  .update(schema.stock_actual)
+                  .set({
+                    saldo_actual: 0,
+                    updated_at: sql`NOW()`
+                  })
+                  .where(inArray(schema.stock_actual.id, otrasFilasConStock.map((f) => f.id)))
+              }
+
+              // El nuevo saldo de la fila principal debe ser exactamente el stock total deseado
+              nuevoSaldoInt = nuevoSaldoTotalDeseadoInt
+              deltaInt = nuevoSaldoTotalDeseadoInt - saldoTotalProdInt
             }
 
             // Si no hay diferencia de inventario en conteo físico, omitir
