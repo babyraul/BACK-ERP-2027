@@ -10,7 +10,7 @@ const { getFactores, toVolumenVisual } = require('../../../utils/factores')
  */
 const ventasService = {
   // Listar ventas con filtros y RLS por sucursal
-  async listarVentas({ fechaInicio, fechaFin, estado, tipoDocumento, q, branchId, esSuperAdmin }) {
+  async listarVentas({ fechaInicio, fechaFin, estado, tipoDocumento, q, branchId, esSuperAdmin, limit, offset }) {
     const { factorPrecio } = await getFactores()
     return ventasRepository.getVentas({
       fechaInicio,
@@ -20,7 +20,9 @@ const ventasService = {
       q,
       branchId,
       esSuperAdmin,
-      factorPrecio
+      factorPrecio,
+      limit,
+      offset
     })
   },
 

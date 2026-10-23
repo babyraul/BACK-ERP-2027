@@ -9,17 +9,23 @@ const combosController = {
   // GET /api/combos
   async listar(request, reply) {
     try {
-      const { q, activo } = request.query
+      const { q, activo, limit, offset } = request.query
       const empresaId = request.user?.empresa_id || request.user?.branch_id
       const branchId = request.user?.branch_id
       const esSuperAdmin = Boolean(request.user?.es_super_admin)
+
+      // Límite defensivo de seguridad: default 200, máx 1000 combos
+      const safeLimit = limit !== undefined ? Math.min(Math.max(1, Number(limit) || 200), 1000) : 200
+      const safeOffset = offset !== undefined ? Math.max(0, Number(offset) || 0) : 0
 
       const result = await combosService.listarCombos({
         q,
         activo,
         empresaId,
         branchId,
-        esSuperAdmin
+        esSuperAdmin,
+        limit: safeLimit,
+        offset: safeOffset
       })
 
       return reply.code(200).send(result)

@@ -18,7 +18,7 @@ const isUUID = (str) =>
  */
 const preventasService = {
   // Listar preventas con filtros
-  async listarPreventas({ fechaInicio, fechaFin, estado, q, branchId, esSuperAdmin }) {
+  async listarPreventas({ fechaInicio, fechaFin, estado, q, branchId, esSuperAdmin, limit, offset }) {
     const { factorPrecio } = await getFactores()
     return preventasRepository.getPreventas({
       fechaInicio,
@@ -27,7 +27,9 @@ const preventasService = {
       q,
       branchId,
       esSuperAdmin,
-      factorPrecio
+      factorPrecio,
+      limit,
+      offset
     })
   },
 

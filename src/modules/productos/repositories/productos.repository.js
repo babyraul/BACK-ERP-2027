@@ -9,7 +9,7 @@ const { eq, and, or, ilike, desc, sql, inArray } = require('drizzle-orm')
  */
 const productosRepository = {
   // Obtener catálogo de productos con joins a categorías, subcategorías y unidades
-  async getProductos({ q, categoriaId, activo, empresaId, esSuperAdmin = false }) {
+  async getProductos({ q, categoriaId, activo, empresaId, esSuperAdmin = false, limit, offset }) {
     const conditions = []
 
     if (!esSuperAdmin && empresaId) {
@@ -73,7 +73,16 @@ const productosRepository = {
       query = query.where(and(...conditions))
     }
 
-    return query.orderBy(desc(schema.productos.created_at))
+    query = query.orderBy(desc(schema.productos.created_at))
+
+    if (limit) {
+      query = query.limit(limit)
+    }
+    if (offset) {
+      query = query.offset(offset)
+    }
+
+    return query
   },
 
   // Obtener producto único por ID con sus joins

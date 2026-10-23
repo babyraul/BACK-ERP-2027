@@ -15,13 +15,15 @@ const {
  */
 const productosService = {
   // 1. Listar catálogo de productos enriquecido con presentaciones y stock
-  async listarProductos({ q, categoriaId, activo, empresaId, branchId, esSuperAdmin }) {
+  async listarProductos({ q, categoriaId, activo, empresaId, branchId, esSuperAdmin, limit, offset }) {
     const productosRows = await productosRepository.getProductos({
       q,
       categoriaId,
       activo,
       empresaId,
-      esSuperAdmin
+      esSuperAdmin,
+      limit,
+      offset
     })
 
     const { factorPrecio, factorVolumen } = await getFactores()

@@ -9,9 +9,13 @@ const preventasController = {
   // GET /api/preventas
   async listar(request, reply) {
     try {
-      const { fecha_inicio, fecha_fin, estado, q } = request.query
+      const { fecha_inicio, fecha_fin, estado, q, limit, offset } = request.query
       const branchId = request.user?.branch_id
       const esSuperAdmin = Boolean(request.user?.es_super_admin)
+
+      // Límite defensivo de seguridad: default 200, máximo 500 por consulta
+      const safeLimit = limit !== undefined ? Math.min(Math.max(1, Number(limit) || 200), 500) : 200
+      const safeOffset = offset !== undefined ? Math.max(0, Number(offset) || 0) : 0
 
       const preventas = await preventasService.listarPreventas({
         fechaInicio: fecha_inicio,
@@ -19,10 +23,18 @@ const preventasController = {
         estado,
         q,
         branchId,
-        esSuperAdmin
+        esSuperAdmin,
+        limit: safeLimit,
+        offset: safeOffset
       })
 
-      return reply.code(200).send({ success: true, data: preventas, total: preventas.length })
+      return reply.code(200).send({
+        success: true,
+        data: preventas,
+        total: preventas.length,
+        limit: safeLimit,
+        offset: safeOffset
+      })
     } catch (error) {
       request.log.error(error)
       const statusCode = error.statusCode || 500

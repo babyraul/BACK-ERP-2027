@@ -18,7 +18,7 @@ const {
  */
 const stockService = {
   // 1. Obtener listado de stock actual consolidado
-  async getStockList({ almacenId, categoriaId, estadoStock, q, activo, empresaId, branchId, esSuperAdmin }) {
+  async getStockList({ almacenId, categoriaId, estadoStock, q, activo, empresaId, branchId, esSuperAdmin, limit, offset }) {
     const almacenesRows = await stockRepository.getAlmacenes(branchId, esSuperAdmin)
     const almacenPrincipal = almacenesRows[0] || null
     const almacenFiltroId = almacenId || null
@@ -28,7 +28,9 @@ const stockService = {
       categoriaId,
       q,
       activo,
-      esSuperAdmin
+      esSuperAdmin,
+      limit,
+      offset
     })
 
     const { factorPrecio, factorVolumen } = await getFactores()
@@ -180,7 +182,7 @@ const stockService = {
   },
 
   // 2. Consultar Kárdex histórico
-  async getKardex({ productoId, presentacionId, almacenId, tipoMov, fechaInicio, fechaFin, branchId, esSuperAdmin }) {
+  async getKardex({ productoId, presentacionId, almacenId, tipoMov, fechaInicio, fechaFin, branchId, esSuperAdmin, limit, offset }) {
     if (!productoId) {
       const error = new Error('El parámetro producto_id es obligatorio para consultar el Kárdex.')
       error.statusCode = 400
@@ -197,7 +199,9 @@ const stockService = {
       fechaInicio,
       fechaFin,
       branchId,
-      esSuperAdmin
+      esSuperAdmin,
+      limit,
+      offset
     })
 
     const movimientos = rawMovimientos.map((m) => ({

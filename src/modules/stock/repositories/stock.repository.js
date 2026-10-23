@@ -84,7 +84,7 @@ const stockRepository = {
   },
 
   // Obtener catálogo de productos filtrados
-  async getProductosFiltrados({ empresaId, categoriaId, q, activo, esSuperAdmin = false }) {
+  async getProductosFiltrados({ empresaId, categoriaId, q, activo, esSuperAdmin = false, limit, offset }) {
     const prodConds = []
     if (activo !== undefined && activo !== 'todos' && activo !== '') {
       prodConds.push(eq(schema.productos.activo, activo === 'true' || activo === true))
@@ -109,7 +109,7 @@ const stockRepository = {
       )
     }
 
-    return db
+    let query = db
       .select({
         id: schema.productos.id,
         codigo: schema.productos.codigo,
@@ -131,6 +131,15 @@ const stockRepository = {
       .leftJoin(schema.subcategoria, eq(schema.productos.sub_categoria, schema.subcategoria.id))
       .where(prodConds.length > 0 ? and(...prodConds) : undefined)
       .orderBy(desc(schema.productos.created_at))
+
+    if (limit) {
+      query = query.limit(limit)
+    }
+    if (offset) {
+      query = query.offset(offset)
+    }
+
+    return query
   },
 
   // Obtener presentaciones de una lista de productos

@@ -10,7 +10,7 @@ const { toVolumenVisual } = require('../../../utils/factores')
  */
 const ventasRepository = {
   // Listar ventas con filtros y RLS por sucursal
-  async getVentas({ fechaInicio, fechaFin, estado, tipoDocumento, q, branchId, esSuperAdmin = false, factorPrecio }) {
+  async getVentas({ fechaInicio, fechaFin, estado, tipoDocumento, q, branchId, esSuperAdmin = false, factorPrecio, limit, offset }) {
     const conditions = []
 
     if (!esSuperAdmin && branchId) {
@@ -54,7 +54,7 @@ const ventasRepository = {
       )
     }
 
-    return db
+    let query = db
       .select({
         id: schema.ventas.id,
         numero: sql`CONCAT(COALESCE(${schema.ventas.serie}, 'S/N'), '-', LPAD(CAST(COALESCE(${schema.ventas.correlativo}, 0) AS text), 8, '0'))`,
@@ -114,6 +114,15 @@ const ventasRepository = {
       .leftJoin(schema.sucursales, eq(schema.ventas.branch_id, schema.sucursales.id))
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(schema.ventas.fecha_emision))
+
+    if (limit) {
+      query = query.limit(limit)
+    }
+    if (offset) {
+      query = query.offset(offset)
+    }
+
+    return query
   },
 
   // Obtener cabecera de venta por ID

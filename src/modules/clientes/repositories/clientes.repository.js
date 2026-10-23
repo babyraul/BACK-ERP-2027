@@ -9,7 +9,7 @@ const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
  */
 const clientesRepository = {
   // Obtener listado de clientes con filtros, búsqueda y RLS
-  async getClientes({ q, tipoDocumentoId, estadoCredito, soloActivos = true, empresaId, esSuperAdmin = false }) {
+  async getClientes({ q, tipoDocumentoId, estadoCredito, soloActivos = true, empresaId, esSuperAdmin = false, limit, offset }) {
     const conditions = []
 
     // RLS por empresa si el usuario no es superadmin
@@ -72,10 +72,18 @@ const clientesRepository = {
       })
       .from(schema.clientes)
       .leftJoin(schema.tipo_documento, eq(schema.clientes.tipo_documento_id, schema.tipo_documento.id))
-      .orderBy(desc(schema.clientes.created_at))
 
     if (conditions.length > 0) {
       query = query.where(and(...conditions))
+    }
+
+    query = query.orderBy(desc(schema.clientes.created_at))
+
+    if (limit) {
+      query = query.limit(limit)
+    }
+    if (offset) {
+      query = query.offset(offset)
     }
 
     return query

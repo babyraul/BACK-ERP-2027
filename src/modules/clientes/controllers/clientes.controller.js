@@ -9,10 +9,14 @@ const clientesController = {
   // GET /api/clientes
   async listar(request, reply) {
     try {
-      const { q, tipo_documento_id, estado_credito, incluir_inactivos } = request.query
+      const { q, tipo_documento_id, estado_credito, incluir_inactivos, limit, offset } = request.query
       const empresaId = request.user?.empresa_id || request.user?.branch_id
       const esSuperAdmin = Boolean(request.user?.es_super_admin)
       const soloActivos = incluir_inactivos !== 'true' && incluir_inactivos !== true
+
+      // Límite defensivo de seguridad: default 200, máx 1000 clientes
+      const safeLimit = limit !== undefined ? Math.min(Math.max(1, Number(limit) || 200), 1000) : 200
+      const safeOffset = offset !== undefined ? Math.max(0, Number(offset) || 0) : 0
 
       const data = await clientesService.listarClientes({
         q,
@@ -20,10 +24,18 @@ const clientesController = {
         estadoCredito: estado_credito,
         soloActivos,
         empresaId,
-        esSuperAdmin
+        esSuperAdmin,
+        limit: safeLimit,
+        offset: safeOffset
       })
 
-      return reply.code(200).send({ success: true, data })
+      return reply.code(200).send({
+        success: true,
+        data,
+        total: data.length,
+        limit: safeLimit,
+        offset: safeOffset
+      })
     } catch (error) {
       request.log.error(error)
       const statusCode = error.statusCode || 500

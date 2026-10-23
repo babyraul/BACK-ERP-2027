@@ -17,7 +17,7 @@ END`
  */
 const preventasRepository = {
   // Listar preventas con filtros y RLS por sucursal
-  async getPreventas({ fechaInicio, fechaFin, estado, q, branchId, esSuperAdmin = false, factorPrecio }) {
+  async getPreventas({ fechaInicio, fechaFin, estado, q, branchId, esSuperAdmin = false, factorPrecio, limit, offset }) {
     const conditions = []
 
     if (!esSuperAdmin && branchId) {
@@ -50,7 +50,7 @@ const preventasRepository = {
       )
     }
 
-    return db
+    let query = db
       .select({
         id: schema.pre_ventas.id,
         codigo: sql`CONCAT('PV-', SUBSTRING(CAST(${schema.pre_ventas.id} AS text), 1, 4))`,
@@ -86,6 +86,15 @@ const preventasRepository = {
       .leftJoin(schema.usuarios, eq(schema.pre_ventas.usuario_id, schema.usuarios.id))
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(schema.pre_ventas.created_at))
+
+    if (limit) {
+      query = query.limit(limit)
+    }
+    if (offset) {
+      query = query.offset(offset)
+    }
+
+    return query
   },
 
   // Obtener preventa por ID con información de cliente y usuario

@@ -9,7 +9,7 @@ const { eq, and, desc, sql } = require('drizzle-orm')
  */
 const kardexRepository = {
   // Consultar movimientos históricos del kárdex con filtros
-  async getMovimientos({ productoId, presentacionId, almacenId, tipoMov, fechaInicio, fechaFin, branchId, esSuperAdmin = false }) {
+  async getMovimientos({ productoId, presentacionId, almacenId, tipoMov, fechaInicio, fechaFin, branchId, esSuperAdmin = false, limit, offset }) {
     const conditions = [eq(schema.stock.producto_id, productoId)]
 
     if (!esSuperAdmin && branchId) {
@@ -31,7 +31,7 @@ const kardexRepository = {
       conditions.push(sql`DATE(${schema.stock.created_at}) <= ${fechaFin}::date`)
     }
 
-    return db
+    let query = db
       .select({
         id: schema.stock.id,
         producto_id: schema.stock.producto_id,
@@ -62,6 +62,15 @@ const kardexRepository = {
       .leftJoin(schema.almacenes, eq(schema.stock.almacen_id, schema.almacenes.id))
       .where(and(...conditions))
       .orderBy(desc(schema.stock.created_at))
+
+    if (limit) {
+      query = query.limit(limit)
+    }
+    if (offset) {
+      query = query.offset(offset)
+    }
+
+    return query
   },
 
   // Insertar un movimiento de kárdex dentro de una transacción

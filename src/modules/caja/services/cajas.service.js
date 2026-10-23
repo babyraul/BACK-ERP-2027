@@ -76,7 +76,7 @@ const cajasService = {
   },
 
   // ── TURNOS DE CAJA ───────────────────────────────────────────────────────
-  async listarTurnos({ estado, fecha, usuarioId, identificadorCaja, branchId, esSuperAdmin }) {
+  async listarTurnos({ estado, fecha, usuarioId, identificadorCaja, branchId, esSuperAdmin, limit, offset }) {
     const { factorPrecio } = await getFactores()
     const turnos = await cajasRepository.getTurnos({
       estado,
@@ -84,7 +84,9 @@ const cajasService = {
       usuarioId,
       identificadorCaja,
       branchId,
-      esSuperAdmin
+      esSuperAdmin,
+      limit,
+      offset
     })
 
     return turnos.map((t) => ({

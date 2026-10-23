@@ -12,10 +12,14 @@ const stockController = {
   // GET /api/stock
   async getStock(request, reply) {
     try {
-      const { almacen_id, categoria_id, estado_stock, q, activo } = request.query
+      const { almacen_id, categoria_id, estado_stock, q, activo, limit, offset } = request.query
       const empresaId = request.user?.empresa_id
       const branchId = request.user?.branch_id
       const esSuperAdmin = Boolean(request.user?.es_super_admin)
+
+      // Límite defensivo de seguridad: default 200, máx 1000 productos
+      const safeLimit = limit !== undefined ? Math.min(Math.max(1, Number(limit) || 200), 1000) : 200
+      const safeOffset = offset !== undefined ? Math.max(0, Number(offset) || 0) : 0
 
       const result = await stockService.getStockList({
         almacenId: almacen_id,
@@ -25,14 +29,19 @@ const stockController = {
         activo,
         empresaId,
         branchId,
-        esSuperAdmin
+        esSuperAdmin,
+        limit: safeLimit,
+        offset: safeOffset
       })
 
       return reply.code(200).send({
         success: true,
         data: result.filteredItems,
         almacenes: result.almacenes,
-        resumen: result.resumen
+        resumen: result.resumen,
+        total: result.filteredItems.length,
+        limit: safeLimit,
+        offset: safeOffset
       })
     } catch (error) {
       request.log.error(error)
@@ -53,11 +62,17 @@ const stockController = {
         almacen_id,
         tipo_mov,
         fecha_inicio,
-        fecha_fin
+        fecha_fin,
+        limit,
+        offset
       } = request.query
 
       const branchId = request.user?.branch_id
       const esSuperAdmin = Boolean(request.user?.es_super_admin)
+
+      // Límite defensivo en movimientos: default 200, máx 1000
+      const safeLimit = limit !== undefined ? Math.min(Math.max(1, Number(limit) || 200), 1000) : 200
+      const safeOffset = offset !== undefined ? Math.max(0, Number(offset) || 0) : 0
 
       const result = await stockService.getKardex({
         productoId: producto_id,
@@ -67,13 +82,18 @@ const stockController = {
         fechaInicio: fecha_inicio,
         fechaFin: fecha_fin,
         branchId,
-        esSuperAdmin
+        esSuperAdmin,
+        limit: safeLimit,
+        offset: safeOffset
       })
 
       return reply.code(200).send({
         success: true,
         data: result.movimientos,
-        resumen: result.resumen
+        resumen: result.resumen,
+        total: result.movimientos.length,
+        limit: safeLimit,
+        offset: safeOffset
       })
     } catch (error) {
       request.log.error(error)

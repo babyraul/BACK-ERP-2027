@@ -9,7 +9,7 @@ const { eq, and, or, ilike, desc, sql, inArray } = require('drizzle-orm')
  */
 const combosRepository = {
   // Obtener cabeceras de combos con filtros RLS
-  async getCombosHeader({ q, activo, empresaId, esSuperAdmin = false }) {
+  async getCombosHeader({ q, activo, empresaId, esSuperAdmin = false, limit, offset }) {
     const conditions = [eq(schema.productos.es_combo, true)]
 
     if (!esSuperAdmin && empresaId) {
@@ -31,7 +31,7 @@ const combosRepository = {
       )
     }
 
-    return db
+    let query = db
       .select({
         id: schema.productos.id,
         IdCombo: schema.productos.id,
@@ -49,6 +49,15 @@ const combosRepository = {
       .from(schema.productos)
       .where(and(...conditions))
       .orderBy(desc(schema.productos.created_at))
+
+    if (limit) {
+      query = query.limit(limit)
+    }
+    if (offset) {
+      query = query.offset(offset)
+    }
+
+    return query
   },
 
   // Obtener combo por ID

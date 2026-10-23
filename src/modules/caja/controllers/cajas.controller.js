@@ -79,9 +79,13 @@ const cajasController = {
   // GET /api/cajas/turnos
   async listarTurnos(request, reply) {
     try {
-      const { estado, fecha, usuario_id, identificador_caja } = request.query
+      const { estado, fecha, usuario_id, identificador_caja, limit, offset } = request.query
       const branchId = request.user?.branch_id
       const esSuperAdmin = Boolean(request.user?.es_super_admin)
+
+      // Límite defensivo de seguridad: default 200, máx 1000 turnos
+      const safeLimit = limit !== undefined ? Math.min(Math.max(1, Number(limit) || 200), 1000) : 200
+      const safeOffset = offset !== undefined ? Math.max(0, Number(offset) || 0) : 0
 
       const data = await cajasService.listarTurnos({
         estado,
@@ -89,9 +93,17 @@ const cajasController = {
         usuarioId: usuario_id,
         identificadorCaja: identificador_caja,
         branchId,
-        esSuperAdmin
+        esSuperAdmin,
+        limit: safeLimit,
+        offset: safeOffset
       })
-      return reply.code(200).send({ success: true, data })
+      return reply.code(200).send({
+        success: true,
+        data,
+        total: data.length,
+        limit: safeLimit,
+        offset: safeOffset
+      })
     } catch (error) {
       request.log.error(error)
       const statusCode = error.statusCode || 500

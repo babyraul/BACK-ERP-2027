@@ -92,7 +92,7 @@ const cajasRepository = {
   },
 
   // ── 2. GESTIÓN DE TURNOS ──────────────────────────────────────────────
-  async getTurnos({ estado, fecha, usuarioId, identificadorCaja, branchId, esSuperAdmin = false }) {
+  async getTurnos({ estado, fecha, usuarioId, identificadorCaja, branchId, esSuperAdmin = false, limit, offset }) {
     const conditions = []
     if (!esSuperAdmin && branchId) {
       conditions.push(eq(schema.caja_turnos.branch_id, branchId))
@@ -102,7 +102,7 @@ const cajasRepository = {
     if (identificadorCaja) conditions.push(eq(schema.caja_turnos.identificador_caja, identificadorCaja))
     if (fecha) conditions.push(sql`DATE(${schema.caja_turnos.fecha_apertura}) = ${fecha}`)
 
-    return db
+    let query = db
       .select({
         id: schema.caja_turnos.id,
         usuario_id: schema.caja_turnos.usuario_id,
@@ -121,6 +121,15 @@ const cajasRepository = {
       .leftJoin(schema.caja_turnos_resumen, eq(schema.caja_turnos.id, schema.caja_turnos_resumen.caja_turno_id))
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(schema.caja_turnos.fecha_apertura))
+
+    if (limit) {
+      query = query.limit(limit)
+    }
+    if (offset) {
+      query = query.offset(offset)
+    }
+
+    return query
   },
 
   async getTurnoActivo({ branchId, userId, esSuperAdmin = false }) {

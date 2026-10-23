@@ -11,11 +11,11 @@ const { getFactores, calcularStockPresentacion, toVolumenVisual } = require('../
  */
 const combosService = {
   // Listar combos con cálculo de stock disponible dinámico y precios
-  async listarCombos({ q, activo, empresaId, branchId, esSuperAdmin }) {
+  async listarCombos({ q, activo, empresaId, branchId, esSuperAdmin, limit, offset }) {
     const { factorPrecio, factorVolumen } = await getFactores()
 
-    // 1. Obtener cabeceras de combos
-    const combosRows = await combosRepository.getCombosHeader({ q, activo, empresaId, esSuperAdmin })
+    // 1. Obtener cabeceras de combos con paginación defensiva
+    const combosRows = await combosRepository.getCombosHeader({ q, activo, empresaId, esSuperAdmin, limit, offset })
     if (combosRows.length === 0) {
       return []
     }

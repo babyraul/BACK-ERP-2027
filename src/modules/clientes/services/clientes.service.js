@@ -7,14 +7,16 @@ const clientesRepository = require('../repositories/clientes.repository')
  */
 const clientesService = {
   // Listar clientes con cálculo de saldo disponible y formateo de montos
-  async listarClientes({ q, tipoDocumentoId, estadoCredito, soloActivos, empresaId, esSuperAdmin }) {
+  async listarClientes({ q, tipoDocumentoId, estadoCredito, soloActivos, empresaId, esSuperAdmin, limit, offset }) {
     const data = await clientesRepository.getClientes({
       q,
       tipoDocumentoId,
       estadoCredito,
       soloActivos,
       empresaId,
-      esSuperAdmin
+      esSuperAdmin,
+      limit,
+      offset
     })
 
     return data.map((c) => ({

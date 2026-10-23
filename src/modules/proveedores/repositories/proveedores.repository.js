@@ -9,7 +9,7 @@ const { eq, and, or, ilike, desc, sql } = require('drizzle-orm')
  */
 const proveedoresRepository = {
   // Obtener proveedores con joins a ubigeo y RLS
-  async getProveedores({ q, activo, empresaId, esSuperAdmin = false }) {
+  async getProveedores({ q, activo, empresaId, esSuperAdmin = false, limit, offset }) {
     const conditions = []
 
     if (!esSuperAdmin && empresaId) {
@@ -59,10 +59,18 @@ const proveedoresRepository = {
       })
       .from(schema.proveedores)
       .leftJoin(schema.ubigeo, eq(schema.proveedores.ubigeo, schema.ubigeo.codigo))
-      .orderBy(desc(schema.proveedores.created_at))
 
     if (conditions.length > 0) {
       query = query.where(and(...conditions))
+    }
+
+    query = query.orderBy(desc(schema.proveedores.created_at))
+
+    if (limit) {
+      query = query.limit(limit)
+    }
+    if (offset) {
+      query = query.offset(offset)
     }
 
     const data = await query

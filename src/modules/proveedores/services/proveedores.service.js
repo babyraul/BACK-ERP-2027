@@ -7,8 +7,8 @@ const proveedoresRepository = require('../repositories/proveedores.repository')
  */
 const proveedoresService = {
   // Listar proveedores con filtro y RLS
-  async listarProveedores({ q, activo, empresaId, esSuperAdmin }) {
-    return proveedoresRepository.getProveedores({ q, activo, empresaId, esSuperAdmin })
+  async listarProveedores({ q, activo, empresaId, esSuperAdmin, limit, offset }) {
+    return proveedoresRepository.getProveedores({ q, activo, empresaId, esSuperAdmin, limit, offset })
   },
 
   // Obtener proveedor por ID
