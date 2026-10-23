@@ -1,254 +1,235 @@
-# 🏛️ Arquitectura Empresarial y Guía de Escalabilidad — pERP-2027 (Backend)
+# 🏛️ Arquitectura Empresarial, Integridad Transaccional y Guía de Escalabilidad — pERP-2027 (Backend)
 
-> **Documento:** Plan Maestro de Arquitectura, Rendimiento para Millones de Registros y Hoja de Ruta de Refactorización.  
+> **Documento:** Plan Maestro de Ingeniería, Concurrencia, Rendimiento y Hoja de Ruta de Refactorización Progresiva.  
 > **Proyecto:** pERP-2027 · Backend (`BACK`)  
 > **Stack Base:** Node.js (CommonJS) · Fastify v4 · Drizzle ORM · PostgreSQL 18 (`postgres.js`) · Vitest · PM2  
-> **Fecha:** Octubre 2026  
+> **Estado:** Documento de Trabajo y Especificación Técnica Revisada  
 
 ---
 
-## 🎯 Objetivo y Visión
+## 🎯 1. Filosofía y Principio Rector
 
-Este documento establece las pautas de ingeniería para transformar el backend de **pERP-2027** en un ERP de clase empresarial, preparado para:
-1. Soportar **millones de registros** en tablas de alto tráfico (Kárdex, Ventas, Detalles, Asientos Contables).
-2. Procesar transacciones concurrentes en múltiples sucursales sin condiciones de carrera (*race conditions*) ni bloqueos prolongados (*deadlocks*).
-3. Evitar el "código intocable" (*monolithic spaghetti routes*) desacoplando transporte HTTP, lógica de dominio y persistencia.
-4. Mantener tiempos de respuesta de API `< 100ms` en consultas y evitar *HTTP 504 Gateway Timeouts* en operaciones masivas.
+> **"Un ERP jamás sacrifica la exactitud contable ni la integridad transaccional por mejorar el tiempo de respuesta."**
 
----
-
-## ⚠️ Diagnóstico de la Arquitectura Actual
-
-| Aspecto | Estado Actual | Riesgo a Escala Empresarial |
-| :--- | :--- | :--- |
-| **Capa de Rutas (`routes/`)** | Rutas monolíticas (ej. `stock.routes.js` con >1,100 líneas) con transporte, validación, matemática de negocio y SQL combinados. | Viola SRP (*Single Responsibility Principle*). Dificulta pruebas unitarias aisladas y reutilización desde workers o scripts CLI. |
-| **Agregación en Memoria (Node.js)** | Consultas globales (`GET /api/stock`) traen miles de filas a RAM y ejecutan bucles `forEach` para consolidar saldos y factores. | Cuello de botella en el *Event Loop*. Con catálogos >10,000 productos y >30,000 presentaciones, satura la memoria del proceso Node.js. |
-| **Operaciones Masivas N+1** | Endpoints como `/carga-masiva` ejecutan consultas y bloqueos secuenciales dentro de un bucle `for` (`SELECT ... FOR UPDATE` + `INSERT` + `UPDATE`). | Tiempos de transacción de 10 a 30 segundos. Bloqueo de conexiones en el pool de PostgreSQL y congelamiento de ventas en vivo. |
-| **Paginación** | Consultas sin límites estrictos (`LIMIT` / `OFFSET` ausentes en catálogos y kárdex). | Caídas por *Out of Memory* (OOM) en clientes y servidor ante empresas con alta densidad de movimientos. |
+La escala empresarial en un ERP multiempresa y multisucursal no se demuestra acumulando tecnologías complejas (Redis, workers, microservicios o particiones prematuras). Se demuestra cuando:
+1. **El inventario y el Kárdex son 100% coherentes y auditables** en todo momento.
+2. **El aislamiento multiempresa y multisucursal es hermético**, validado estrictamente en base de datos y lógica de dominio, nunca confiando en IDs enviados libremente por el frontend.
+3. **Las operaciones concurrentes reales** (múltiples cajas cobrando, devoluciones, traslados y ajustes de stock simultáneos) no generan condiciones de carrera (*race conditions*), saldos negativos imprevistos ni bloqueos cruzados (*deadlocks*).
+4. **El código es mantenible, desacoplado y testeable**, evitando "archivos monolíticos intocables" mediante refactorizaciones pequeñas, seguras y verificables que preserven el comportamiento de la API frente al cliente/POS.
 
 ---
 
-## 🏗️ Los 5 Pilares de Arquitectura Enterprise
+## ⚠️ 2. Diagnóstico del Estado Actual
 
-```
-                                  [ CLIENTE / POS / FRONT ]
-                                              │ (HTTP / JWT)
-                                              ▼
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   FASTIFY API GATEWAY                                  │
-│  - Autenticación JWT / API Key                                                         │
-│  - RBAC Granular (Permisos) + RLS Context (Tenant / Branch)                           │
-│  - Validación de Schemas JSON (Fastify / Zod / TypeBox)                                │
-│  - Idempotencia HTTP (Idempotency-Key)                                                 │
-└───────────────────────┬────────────────────────────────────────┬───────────────────────┘
-                        │                                        │
-           [ Peticiones Síncronas < 200ms ]         [ Tareas Pesadas > 500 ítems ]
-                        │                                        │
-                        ▼                                        ▼
-┌──────────────────────────────────────────────┐ ┌───────────────────────────────────────┐
-│              CAPA DE SERVICIOS               │ │          BACKGROUND WORKERS           │
-│  - Reglas de Dominio / Casos de Uso         │ │  - BullMQ (Redis) / PgBoss (Postgres) │
-│  - Transacciones ACID Cortas (< 50ms)        │ │  - Importación Masiva de Inventarios  │
-│  - Cálculos de Factores y Saldos             │ │  - Generación de XML SUNAT y Libros   │
-└───────────────────────┬──────────────────────┘ └───────────────────┬───────────────────┘
-                        │                                            │
-                        ▼                                            ▼
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                              POSTGRESQL 18 (PERSISTENCIA)                              │
-│  - Particionamiento de Tablas por Tiempo/Sucursal (Kárdex, Ventas)                     │
-│  - Vistas Materializadas y Agregaciones SQL (SUM, GROUP BY)                            │
-│  - Operaciones en Lote (Batching / Upsert)                                             │
-│  - Réplicas de Lectura (Read Replicas para Reportes)                                   │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-```
+| Dimensión | Situación Actual Observada | Riesgo Real a Escala | Prioridad |
+| :--- | :--- | :--- | :---: |
+| **Arquitectura de Código** | Rutas monolíticas (ej. `stock.routes.js` con >1,100 líneas) que amalgaman transporte HTTP, validaciones, matemática de negocio y transacciones SQL. | Código frágil y de alto costo de mantenimiento. Imposibilita pruebas unitarias sin levantar el servidor HTTP Fastify. | 🔴 Alta |
+| **Consultas de Inventario** | `GET /api/stock` descarga catálogos amplios a memoria Node.js y computa agregaciones con bucles `forEach`. | Cuello de botella en el Event Loop y consumo excesivo de RAM ante catálogos con miles de productos y presentaciones. | 🔴 Alta |
+| **Operaciones Masivas** | `POST /carga-masiva` ejecuta consultas y bloqueos secuenciales dentro de un bucle `for` (N+1 queries con `FOR UPDATE`). | Tiempos de transacción prolongados (10-30s), manteniendo bloqueos de fila que congelan a los cajeros en vivo. | 🔴 Alta |
+| **Paginación** | Ausencia de límites forzados en listados (`LIMIT` / `OFFSET` / cursores ausentes o no estandarizados). | Riesgo de fallas por memoria (*Out of Memory*) en clientes de bajos recursos (tablets POS, PCs de tienda). | 🟡 Media |
+| **Idempotencia** | Operaciones de venta y cobranza expuestas a duplicidad ante microcortes de red o reintentos de cliente. | Riesgo de doble cargo contable o doble descuento de stock en tienda. | 🔴 Alta |
 
 ---
 
-## 🗺️ Hoja de Ruta de Implementación en 4 Fases
+## 🧪 3. Metas de Rendimiento: Hipótesis Verificables (No Dogmas)
+
+Las metas de rendimiento no son promesas estáticas garantizadas por una arquitectura, sino **hipótesis que deben contrastarse mediante pruebas de carga reales**:
+
+* **Métricas Clave:** Medir latencias percentiles **p50, p95 y p99**, consumo de CPU/RAM del proceso Node.js, conexiones concurrentes activas en el pool de PostgreSQL y duración de retención de locks (`pg_locks`).
+* **Condiciones de Prueba:** Las pruebas deben ejecutarse bajo condiciones de estrés representativas:
+  - 10 a 50 cajas registradoras facturando concurrentemente.
+  - Carga masiva de inventario (1,000 ítems) ejecutándose en paralelo a ventas activas.
+  - Clientes ejecutándose en hardware limitado (POS táctiles con recursos modestos).
 
 ---
 
-### 🔹 FASE 1: Desacoplamiento y Modularización por Dominios (Inmediata)
+## 🔒 4. Integridad Transaccional, Inventario y Concurrencia
 
-**Objetivo:** Extraer la lógica transaccional de los archivos de rutas hacia servicios y repositorios puros.
+### 4.1 Granularidad de Datos y Prevención del Producto Cartesiano en SQL
 
-#### Estructura de Directorios Recomendada (Vertical Slice / DDD Pragmático)
-En lugar de una estructura horizontal plana, organizar por contextos de negocio delimitados (*Bounded Contexts*):
+> [!CAUTION]
+> **Riesgo Crítico de Duplicación de Saldos:**  
+> Si se realiza un `JOIN` directo entre `stock_actual` y `presentaciones` seguido de `SUM(sa.saldo_actual)`, cada fila de stock se multiplicará por la cantidad de presentaciones del producto, inflando falsamente el inventario en el ERP.
 
-```text
-BACK/src/modules/
-├── inventario/
-│   ├── inventario.routes.js        # Declaración pura de endpoints Fastify (< 80 líneas)
-│   ├── inventario.schemas.js       # Validación de payloads y queries (TypeBox / Fastify Schema)
-│   ├── controllers/
-│   │   └── inventario.controller.js # Mapeo HTTP request -> Service -> reply
-│   ├── services/
-│   │   ├── stock.service.js        # Lógica de saldos, consolidación y cálculos
-│   │   ├── reinicioStock.service.js # Caso de uso: Reinicio masivo atómico
-│   │   └── cargaMasiva.service.js   # Caso de uso: Carga masiva e inventario físico
-│   └── repositories/
-│       ├── stock.repository.js     # Consultas Drizzle ORM a tabla stock_actual
-│       └── kardex.repository.js    # Consultas e inserciones a tabla stock (histórico)
-│
-├── ventas/
-├── facturacion/
-└── contabilidad/
-```
+#### Modelo y Relaciones:
+* **Entidad `stock_actual`:** Almacena el saldo físico vigente a nivel de `{ branch_id, almacen_id, producto_id, presentacion_id }` (y opcionalmente `lotes_id`).
+* **Regla de Negocio:** El stock físico real del producto es la suma consolidada de sus unidades base en dicho almacén. La disponibilidad en cada presentación derivada (six pack, caja, display) se proyecta matemáticamente: `FLOOR(saldo_base_total / multiplica_por)`.
 
-#### Regla de Implementación de la Fase 1
-1. **La Ruta (`.routes.js`) solo hace:** `fastify.post('/ruta', { schema, config }, controller.metodo)`.
-2. **El Controlador (`.controller.js`) solo hace:** Extrae `req.body`, `req.user`, llama al servicio y retorna el código HTTP (`200`, `201`, `400`).
-3. **El Servicio (`.service.js`) contiene la lógica:** Maneja la transacción `db.transaction()`, validaciones de negocio, y no conoce nada de Fastify (`request` ni `reply`). Esto permite probarlo con Vitest en memoria.
+#### Consulta SQL Correcta (Agregación Atómica Previa vía CTE / Subquery):
+Para garantizar que **cada fila de saldo se sume exactamente una sola vez**:
 
----
-
-### 🔹 FASE 2: Optimización de Base de Datos y Paginación (Mediano Plazo)
-
-**Objetivo:** Eliminar agregaciones en Node.js y garantizar que consultas con 1,000,000 de registros respondan en < 50ms.
-
-#### 1. Paginación Obligatoria en Todos los Listados
-Ningún endpoint de listado (`GET`) debe retornar colecciones abiertas.
-* Usar `limit` (por defecto 50, máximo 200) y `offset` (o paginación basada en cursor para kárdex).
-* Retornar metadatos estándar:
-  ```json
-  {
-    "success": true,
-    "data": [ ... ],
-    "pagination": {
-      "total": 45890,
-      "page": 1,
-      "limit": 50,
-      "totalPages": 918
-    }
-  }
-  ```
-
-#### 2. Agregación en SQL en lugar de Node.js
-Reemplazar la carga masiva a memoria de `GET /api/stock` por una consulta SQL con `JOIN`, `GROUP BY` y agregación directa:
 ```sql
+WITH stock_consolidado_producto AS (
+    -- Paso 1: Agregación atómica por producto y almacén (SIN JOIN con presentaciones)
+    SELECT 
+        sa.producto_id,
+        COALESCE(SUM(sa.saldo_actual), 0) AS saldo_total_base,
+        MAX(sa.updated_at) AS ultimo_movimiento
+    FROM stock_actual sa
+    WHERE sa.branch_id = :branchId
+      AND (:almacenId IS NULL OR sa.almacen_id = :almacenId)
+    GROUP BY sa.producto_id
+),
+stock_por_presentacion_individual AS (
+    -- Paso 2: Saldo registrado específicamente en la fila de la presentación
+    SELECT 
+        sa.producto_id,
+        sa.presentacion_id,
+        sa.saldo_actual AS saldo_fila_presentacion
+    FROM stock_actual sa
+    WHERE sa.branch_id = :branchId
+      AND (:almacenId IS NULL OR sa.almacen_id = :almacenId)
+)
 SELECT 
     p.id AS producto_id,
-    p.nombre,
     p.codigo,
-    COALESCE(SUM(sa.saldo_actual), 0) AS saldo_total_base,
+    p.nombre AS producto_nombre,
+    p.stock_minimo,
+    p.es_combo,
     pr.id AS presentacion_id,
     pr.nombre AS presentacion_nombre,
-    pr.multiplica_por,
-    FLOOR(COALESCE(SUM(sa.saldo_actual), 0) / NULLIF(pr.multiplica_por, 0)) AS saldo_presentacion
+    COALESCE(pr.multiplica_por, 1) AS multiplica_por,
+    -- Saldo consolidado exacto en unidad base
+    COALESCE(scp.saldo_total_base, 0) AS saldo_producto_total,
+    -- Saldo calculado disponible para esta presentación
+    FLOOR(COALESCE(scp.saldo_total_base, 0) / NULLIF(COALESCE(pr.multiplica_por, 1), 0)) AS saldo_actual_presentacion,
+    COALESCE(spp.saldo_fila_presentacion, 0) AS saldo_movimiento_presentacion
 FROM productos p
-LEFT JOIN presentaciones pr ON pr.producto_uuid = p.id
-LEFT JOIN stock_actual sa ON sa.producto_id = p.id AND sa.almacen_id = :almacenId
-WHERE p.empresa_id = :empresaId AND p.activo = true
-GROUP BY p.id, pr.id
-ORDER BY p.es_combo DESC, p.nombre ASC
+INNER JOIN presentaciones pr ON pr.producto_uuid = p.id
+LEFT JOIN stock_consolidado_producto scp ON scp.producto_id = p.id
+LEFT JOIN stock_por_presentacion_individual spp ON spp.producto_id = p.id AND spp.presentacion_id = pr.id
+WHERE (p.empresa_id = :empresaId OR p.empresa_id IS NULL)
+  AND (:activo IS NULL OR p.activo = :activo)
+  AND (:categoriaId IS NULL OR p.categoria = :categoriaId)
+ORDER BY p.es_combo DESC, p.nombre ASC, pr.multiplica_por ASC
 LIMIT :limit OFFSET :offset;
 ```
 
-#### 3. Particionamiento de Tablas de Alto Crecimiento (PostgreSQL 18)
-La tabla histórica `stock` (kárdex) superará rápidamente los 5 millones de registros en producción. Se debe particionar nativamente por rango de fecha:
-```sql
--- Tabla principal particionada
-CREATE TABLE stock_particionado (
-    id UUID NOT NULL,
-    producto_id UUID NOT NULL,
-    branch_id UUID NOT NULL,
-    cantidad NUMERIC,
-    saldo NUMERIC,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (id, created_at)
-) PARTITION BY RANGE (created_at);
+---
 
--- Partición por año/mes
-CREATE TABLE stock_y2026m10 PARTITION OF stock_particionado
-    FOR VALUES FROM ('2026-10-01 00:00:00') TO ('2026-11-01 00:00:00');
+### 4.2 Control de Concurrencia, Bloqueos Canónicos y Prevención de Deadlocks
+
+En operaciones masivas (cargas de stock, inventarios físicos, reinicios), **no se debe utilizar `Promise.all` descuidado mezclando lecturas con `FOR UPDATE`**. Si dos transacciones intentan bloquear los mismos productos en diferente secuencia, PostgreSQL abortará una con error `40P01 (deadlock detected)`.
+
+#### Reglas de Concurrencia Enterprise:
+1. **Orden Determinista Canónico:**  
+   Siempre ordenar los identificadores de productos antes de invocar `FOR UPDATE`. De este modo, todas las operaciones del sistema (ventas, compras, ajustes) adquieren los locks en el mismo orden físico exacto:
+   ```javascript
+   const sortedProdIds = [...new Set(items.map(i => i.producto_id))].sort()
+   ```
+2. **Restricción de Integridad Única en Base de Datos:**  
+   Garantizar a nivel de motor SQL la unicidad del saldo para evitar filas duplicadas huérfanas:
+   ```sql
+   CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_actual_almacen_prod_pres 
+   ON stock_actual (branch_id, almacen_id, producto_id, presentacion_id);
+   ```
+3. **Fragmentación en Lotes (Chunking) y Transacciones Ultra-cortas:**  
+   Fragmentar operaciones masivas en lotes de **100 a 200 ítems**. Cada transacción debe abrirse, ejecutar el cálculo en memoria, persistir el batch y cerrarse en menos de **50 ms**, liberando de inmediato las filas para las cajas registradoras.
+4. **Ámbito Estricto de Bloqueo por Sucursal y Almacén:**  
+   Las cláusulas de bloqueo deben incluir invariablemente `branch_id` y `almacen_id`. Un inventario en el Almacén 1 jamás debe bloquear los productos del Almacén 2.
+5. **Reintentos Automáticos ante Conflictos de Concurrencia:**  
+   Implementar reintentos con *backoff exponencial* controlado (máximo 3 intentos) para capturar errores transitorios de serialización (`40001`) o bloqueos temporales.
+
+---
+
+### 4.3 Idempotencia Persistente para Ventas y Cobros
+
+> [!IMPORTANT]
+> La idempotencia no puede depender de una ventana volátil de 2 minutos en memoria. Una desconexión prolongada en un punto de venta rural o un reintento tardío del navegador no deben duplicar una venta.
+
+#### Diseño de Idempotencia de Grado Financiero:
+1. **Tabla de Operaciones Idempotentes en PostgreSQL:**
+   ```sql
+   CREATE TABLE idempotencia_operaciones (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       empresa_id UUID NOT NULL,
+       branch_id UUID NOT NULL,
+       operacion VARCHAR(50) NOT NULL, -- 'VENTA', 'AJUSTE_STOCK', 'COBRO'
+       idempotency_key VARCHAR(120) NOT NULL,
+       request_hash VARCHAR(64) NOT NULL, -- SHA-256 del payload recibido
+       status VARCHAR(20) NOT NULL, -- 'PROCESANDO', 'COMPLETADO', 'FALLIDO'
+       response_code INTEGER,
+       response_body JSONB,
+       created_at TIMESTAMPTZ DEFAULT NOW(),
+       updated_at TIMESTAMPTZ DEFAULT NOW(),
+       CONSTRAINT uq_idempotencia_empresa_clave UNIQUE (empresa_id, operacion, idempotency_key)
+   );
+   ```
+2. **Comportamiento ante Reintentos:**
+   * **Misma clave y mismo hash:** Si la operación ya fue `COMPLETADA`, se retorna inmediatamente el `response_body` original con el mismo código HTTP, sin tocar inventario ni generar nuevos comprobantes.
+   * **Misma clave pero diferente payload (`request_hash`):** Se rechaza con `HTTP 409 Conflict` (intento de reutilización indebida de clave con datos distintos).
+   * **Estado `PROCESANDO`:** Si llega una petición idéntica mientras la primera aún se está ejecutando, se responde `HTTP 425 Too Early` o `HTTP 409` solicitando esperar el resultado de la transacción en curso.
+
+---
+
+### 4.4 Criterio Técnico sobre Particionamiento de Tablas
+
+* **No particionar preventivamente solo por superar 5 millones de filas:** El particionamiento agrega sobrecarga operativa en DDL, dificulta la definición de claves foráneas globales y exige que las claves primarias contengan la clave de partición (`PRIMARY KEY (id, created_at)`).
+* **Estrategia Correcta:**
+  1. Primero, optimizar índices compuestos (`btree`, índices parciales con `WHERE activo = true`).
+  2. Evaluar el tamaño físico en disco de la tabla e índices (`pg_total_relation_size`).
+  3. Particionar únicamente si las consultas de negocio filtran consistentemente por el criterio de partición (ej. consultas de Kárdex estrictamente por rango mensual) permitiendo que el planificador de PostgreSQL aplique *Partition Pruning* efectivo.
+
+---
+
+## 🏛️ 5. Arquitectura por Dominios (Vertical Slice Architecture)
+
+En lugar de una división puramente técnica horizontal, el ERP se estructura por contextos delimitados (*Bounded Contexts*):
+
+```text
+BACK/src/modules/
+├── inventario/                    # Contexto: Stock, Kárdex, Presentaciones, Almacenes
+│   ├── inventario.routes.js        # Declaración pura de rutas Fastify y schemas
+│   ├── controllers/
+│   │   └── inventario.controller.js # Mapeo HTTP (req/res, status codes)
+│   ├── services/
+│   │   ├── stock.service.js        # Reglas de negocio: consolidación de saldos y factores
+│   │   ├── reinicioStock.service.js # Caso de uso transaccional: reinicio masivo
+│   │   └── cargaMasiva.service.js   # Caso de uso transaccional: inventario por lotes
+│   └── repositories/
+│       ├── stock.repository.js     # Consultas Drizzle ORM sobre stock_actual
+│       └── kardex.repository.js    # Inserciones y consultas históricas sobre stock
+│
+├── ventas/                        # Contexto: Facturación, Boletas, Preventas, Cajas
+├── clientes/                      # Contexto: Clientes, RUC/DNI, Líneas de crédito
+├── contabilidad/                  # Contexto: Asientos contables, Libros electrónicos
+└── sync/                          # Contexto: Sincronización Server-to-Server
 ```
-* **Impacto:** Consultar el Kárdex de un mes escanea **únicamente la partición de ese mes**, ignorando millones de registros históricos antiguos.
 
 ---
 
-### 🔹 FASE 3: Operaciones en Lote (Batching & Bulk Operations)
+## 🚀 6. Orden de Ejecución Pragmático (Paso a Paso)
 
-**Objetivo:** Reducir tiempos de procesamiento en Carga Masiva de 15 segundos a < 300ms eliminando el antipatrón de queries N+1.
+Para no desestabilizar la aplicación en producción, la refactorización debe ejecutarse en fases ordenadas y verificables:
 
-#### Cómo transformar el bucle secuencial en Carga Masiva:
-En lugar de:
-```javascript
-// ❌ ANTIPATRÓN: N queries por cada elemento en el bucle
-for (const item of items) {
-  await tx.select().from(presentaciones)...
-  await tx.select().from(stock_actual).for('update')...
-  await tx.update(stock_actual)...
-  await tx.insert(stock)...
-}
+```mermaid
+flowchart TD
+    A["Paso 1: Auditoría y Medición Inicial"] --> B["Paso 2: Desacoplamiento sin cambio de comportamiento"]
+    B --> C["Paso 3: Corrección SQL y Optimización de Inventario"]
+    C --> D["Paso 4: Blindaje Transaccional e Idempotencia Persistente"]
+    D --> E["Paso 5: Tareas Asíncronas según Necesidad Real"]
+    E --> F["Paso 6: Escalabilidad Avanzada de BD"]
 ```
 
-Aplicar **Bulk Processing**:
-```javascript
-// ✅ PATRÓN ENTERPRISE: Batching en 3 pasos
-// 1. Cargar todas las presentaciones y filas de stock_actual necesarias en 2 queries únicas
-const prodIds = items.map(i => i.producto_id);
-const [todasPresentaciones, filasStockActual] = await Promise.all([
-  tx.select().from(schema.presentaciones).where(inArray(schema.presentaciones.producto_uuid, prodIds)),
-  tx.select().from(schema.stock_actual).where(inArray(schema.stock_actual.producto_id, prodIds)).for('update')
-]);
+### Paso 1: Auditoría y Medición Inicial
+* Medir tiempos de respuesta actuales de `GET /api/stock`, `POST /ajuste` y `POST /carga-masiva`.
+* Revisar planes de ejecución (`EXPLAIN ANALYZE`) e índices existentes en `stock_actual` y `stock`.
 
-// 2. Calcular los deltas en memoria en microsegundos
-const updatesStockActual = [];
-const insertsKardex = [];
+### Paso 2: Desacoplamiento Estructural (Sin alterar comportamiento)
+* Extraer controladores y servicios de `stock.routes.js` a `src/modules/inventario/`.
+* Verificar que la API responda exactamente la misma estructura JSON al frontend existente.
 
-for (const item of items) {
-  // Lógica matemática pura en memoria sin round-trips a la BD
-  // Construir objetos para inserción/actualización masiva
-}
+### Paso 3: Corrección de Inventario y Batching
+* Implementar la consulta SQL con CTEs de agregación atómica previa para eliminar el riesgo de duplicación de saldos.
+* Agregar orden canónico (`.sort()`) en bloqueos de fila para erradicar *deadlocks*.
+* Implementar paginación estándar (`limit`, `offset` / cursor).
 
-// 3. Persistir en la BD con operaciones masivas
-if (insertsKardex.length > 0) {
-  await tx.insert(schema.stock).values(insertsKardex); // Bulk insert único
-}
-```
+### Paso 4: Blindaje Transaccional y Auditoría
+* Crear tabla persistente de `idempotencia_operaciones` para ventas y movimientos.
+* Asegurar que todo movimiento de stock guarde su documento de auditoría verificable en Kárdex.
 
----
+### Paso 5: Procesamiento Asíncrono Selectivo
+* Incorporar colas de trabajo en segundo plano (**PgBoss** sobre PostgreSQL sin añadir dependencias externas de infraestructura) para reportes pesados, importaciones masivas y comunicación SUNAT.
 
-### 🔹 FASE 4: Procesamiento Asíncrono y Resiliencia Empresarial
-
-**Objetivo:** Proteger el servidor HTTP frente a cargas extremas y desconexiones de red.
-
-#### 1. Cola de Trabajos en Segundo Plano (Job Queues)
-Para tareas con más de 500 ítems o generación de reportes tributarios/SUNAT:
-* Utilizar **BullMQ** (apoyado en Redis) o **PgBoss** (cola ligera nativa sobre PostgreSQL sin infraestructura extra).
-* **Flujo Asíncrono:**
-  1. Frontend hace `POST /api/stock/carga-masiva` (payload de 3,000 ítems).
-  2. Fastify responde de inmediato:
-     ```json
-     {
-       "success": true,
-       "status": "PROCESANDO",
-       "jobId": "job_94829384",
-       "message": "La carga masiva se está procesando en segundo plano."
-     }
-     ```
-  3. Un worker independiente procesa los lotes en *chunks* de 500.
-  4. Al finalizar, notifica vía WebSocket o SSE (*Server-Sent Events*) al frontend.
-  5. **Resultado:** Ninguna caja o venta se congela mientras se procesa un inventario masivo.
-
-#### 2. Idempotencia en Pagos y Movimientos Contables
-Para evitar duplicación de ventas por fallas de red en puntos de venta:
-* Exigir el header `Idempotency-Key: <UUID>` en endpoints críticos (`/api/ventas`, `/api/stock/ajuste`).
-* Un middleware en Fastify almacena la clave en caché (Redis o tabla de tokens de idempotencia). Si la misma clave llega en menos de 2 minutos, devuelve la respuesta guardada sin reejecutar la transacción contable.
-
----
-
-## 📋 Matriz de Prioridad de Ejecución
-
-| Tarea | Prioridad | Impacto | Esfuerzo |
-| :--- | :---: | :---: | :---: |
-| **Separar `stock.routes.js` en Controller + Service** | 🔴 Alta | Alto (Mantenibilidad / Cero "Código Intocable") | 1 día |
-| **Implementar Batching en `cargaMasiva`** | 🔴 Alta | Crítico (Elimina bloqueos en BD) | 1 día |
-| **Paginación (`limit`, `offset`) en `GET /api/stock`** | 🟡 Media | Alto (Protege memoria RAM del servidor) | 1 día |
-| **Trasladar saldos consolidados a consulta SQL directa** | 🟡 Media | Alto (Rendimiento 10x) | 2 días |
-| **Implementar Worker de segundo plano (PgBoss)** | 🟢 Planificada | Escalabilidad Enterprise (> 100k transacciones/día) | 3 días |
-| **Particionamiento de tabla `stock` en PostgreSQL** | 🟢 Planificada | Escalabilidad a largo plazo (> 5M filas) | 2 días |
-
----
-
-> **Conclusión:** La solidez matemática y transaccional actual de pERP-2027 es correcta y segura. Siguiendo este plan de 4 fases, la aplicación mantendrá esa exactitud contable mientras escala a niveles de millones de operaciones corporativas sin fricciones.
+### Paso 6: Escalabilidad Avanzada basada en Evidencia
+* Monitorear el crecimiento en disco. Si las métricas lo justifican, evaluar vistas materializadas para reportes o particionamiento mensual de Kárdex.
