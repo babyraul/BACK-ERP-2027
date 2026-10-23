@@ -32,6 +32,7 @@
    - [3.4 Capa de Plugins Fastify (`src/plugins/`)](#34-capa-de-plugins-fastify-srcplugins)
 4. [Variables de Entorno Requeridas](#4-variables-de-entorno-requeridas)
 5. [Mecanismos Clave de Seguridad y Arquitectura](#5-mecanismos-clave-de-seguridad-y-arquitectura)
+6. [Arquitectura Enterprise y Guía de Escalabilidad (`ARQUITECTURA_ESCALABILIDAD.md`)](#6-arquitectura-enterprise-y-guía-de-escalabilidad)
 
 ---
 
@@ -517,6 +518,13 @@ Las siguientes variables son leídas por el backend a través de `dotenv` y `@fa
 
 ### 5.4 Integridad Transaccional
 - Toda operación que involucre más de una tabla dependiente (por ejemplo, registrar una empresa junto con su sucursal y almacén principal, o registrar un usuario con su acceso y rol inicial) se ejecuta dentro de un bloque `await db.transaction(async (tx) => ...)`. Si cualquier paso falla, se realiza un rollback automático.
+
+---
+
+## 6. Arquitectura Enterprise y Guía de Escalabilidad
+
+Para consultar el plan maestro de crecimiento hacia millones de transacciones, reducción de cuellos de botella y desacoplamiento de capas (Fases 1 a 4), consultar:
+👉 **[ARQUITECTURA_ESCALABILIDAD.md](ARQUITECTURA_ESCALABILIDAD.md)**
 
 ---
 

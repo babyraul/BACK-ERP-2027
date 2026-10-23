@@ -111,6 +111,7 @@ async function ventasRoutes(fastify) {
           xml_url: schema.ventas.xml_url,
           cdr_url: schema.ventas.cdr_url,
           pdf_url: schema.ventas.pdf_url,
+          observacion_sunat: schema.ventas.observacion_sunat,
           created_at: schema.ventas.created_at,
           tipos_pago: sql`(
             SELECT STRING_AGG(COALESCE(tmp.nombre, 'Efectivo'), ', ')
@@ -793,6 +794,72 @@ async function ventasRoutes(fastify) {
                   precio_proporcional_historico: precioProporcionalHistorico
                 })
               }
+            }
+
+            // REGISTRAR MOVIMIENTO HISTÓRICO Y SALDO PARA EL PROPIO COMBO
+            // Permite auditar en Kárdex la salida del combo y reflejar su conteo acumulado de ventas
+            if (almacen && item.producto_id && presId) {
+              const stockComboRows = await tx
+                .select()
+                .from(schema.stock_actual)
+                .where(
+                  and(
+                    eq(schema.stock_actual.branch_id, branchId),
+                    eq(schema.stock_actual.almacen_id, almacen.id),
+                    eq(schema.stock_actual.producto_id, item.producto_id)
+                  )
+                )
+                .for('update')
+
+              const saldoComboAnteriorInt = stockComboRows.reduce(
+                (acc, r) => acc + normalizeVolumenInt(r.saldo_actual, factorVolumen),
+                0
+              )
+              const stockComboExistente = stockComboRows.find(
+                (r) => r.presentacion_id === presId
+              )
+
+              const nuevoSaldoComboTotalInt = saldoComboAnteriorInt - cantidadBaseInt
+
+              if (stockComboExistente) {
+                const saldoFilaComboInt = normalizeVolumenInt(stockComboExistente.saldo_actual, factorVolumen)
+                const nuevoSaldoFilaComboInt = saldoFilaComboInt - cantidadBaseInt
+                await tx
+                  .update(schema.stock_actual)
+                  .set({
+                    saldo_actual: nuevoSaldoFilaComboInt,
+                    updated_at: sql`NOW()`
+                  })
+                  .where(eq(schema.stock_actual.id, stockComboExistente.id))
+              } else {
+                await tx.insert(schema.stock_actual).values({
+                  branch_id: branchId,
+                  almacen_id: almacen.id,
+                  producto_id: item.producto_id,
+                  presentacion_id: presId,
+                  lotes_id: null,
+                  saldo_actual: 0 - cantidadBaseInt,
+                  updated_at: sql`NOW()`
+                })
+              }
+
+              // Registrar en tabla histórica stock (Kárdex del Combo)
+              await tx.insert(schema.stock).values({
+                producto_id: item.producto_id,
+                presentacion_id: presId,
+                lotes_id: null,
+                cantidad: cantInt,
+                multiplica_por: multiplicaPor,
+                cantidad_base: cantidadBaseInt,
+                saldo: nuevoSaldoComboTotalInt,
+                documento_id: nuevaVenta.id,
+                documento: numeroComprobante,
+                tipo_mov: 2, // Salida por venta
+                concepto: `VENTA COMBO (${item.nombre_completo || 'COMBO'}) - ${numeroComprobante}`,
+                usuario_id: usuarioId,
+                branch_id: branchId,
+                almacen_id: almacen.id
+              })
             }
           } else {
             // PRODUCTO INDIVIDUAL: Actualizar stock_actual de este producto e insertar Kárdex

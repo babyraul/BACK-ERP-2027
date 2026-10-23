@@ -637,7 +637,7 @@ async function stockRoutes(fastify) {
     },
     async (request, reply) => {
       try {
-        const { almacen_id, motivo, tipo_saldo = 'todos' } = request.body || {}
+        const { almacen_id, motivo, tipo_saldo = 'todos', incluir_combos = false } = request.body || {}
         const branchId = request.user?.branch_id
         const usuarioId = request.user?.id
 
@@ -667,42 +667,97 @@ async function stockRoutes(fastify) {
             stockConds.push(eq(schema.stock_actual.almacen_id, almacen_id))
           }
 
-          const filasConStock = await tx
+          // 1. Obtener y bloquear las filas de stock_actual
+          let filasStockActual = await tx
             .select()
             .from(schema.stock_actual)
-            .where(and(...stockConds))
+            .where(eq(schema.stock_actual.branch_id, branchId))
             .for('update')
 
-          if (filasConStock.length === 0) {
+          if (almacen_id) {
+            filasStockActual = filasStockActual.filter((f) => f.almacen_id === almacen_id)
+          }
+
+          // Cargar información de productos para saber si son combos y sus nombres
+          const prodIdsTotales = Array.from(new Set(filasStockActual.map((f) => f.producto_id).filter(Boolean)))
+          const prodNombresMap = {}
+          const prodEsComboMap = {}
+
+          if (prodIdsTotales.length > 0) {
+            const prods = await tx
+              .select({
+                id: schema.productos.id,
+                nombre: schema.productos.nombre,
+                es_combo: schema.productos.es_combo
+              })
+              .from(schema.productos)
+              .where(inArray(schema.productos.id, prodIdsTotales))
+            prods.forEach((p) => {
+              prodNombresMap[p.id] = p.nombre
+              prodEsComboMap[p.id] = Boolean(p.es_combo)
+            })
+          }
+
+          // Calcular el saldo TOTAL acumulado del producto (sumando todas sus presentaciones en este almacén/sucursal)
+          const saldoTotalPorProductoInt = {}
+          filasStockActual.forEach((f) => {
+            const saldoInt = normalizeVolumenInt(f.saldo_actual, factorVolumen)
+            saldoTotalPorProductoInt[f.producto_id] = (saldoTotalPorProductoInt[f.producto_id] || 0) + saldoInt
+          })
+
+          // Filtrar qué PRODUCTOS califican para el reinicio según su SALDO TOTAL REAL y la exclusión de combos
+          const productosQueCalifican = prodIdsTotales.filter((prodId) => {
+            if (!incluir_combos && prodEsComboMap[prodId]) return false
+            const saldoTotal = saldoTotalPorProductoInt[prodId] || 0
+            if (tipo_saldo === 'solo_negativos') return saldoTotal < 0
+            if (tipo_saldo === 'solo_positivos') return saldoTotal > 0
+            return saldoTotal !== 0
+          })
+
+          // Quedarnos ÚNICAMENTE con las filas de stock_actual pertenecientes a los productos que realmente califican
+          const filasElegibles = filasStockActual.filter((f) => productosQueCalifican.includes(f.producto_id))
+
+          if (filasElegibles.length === 0) {
             const filtroTexto =
               tipo_saldo === 'solo_negativos'
-                ? 'en stock negativo'
+                ? 'con saldo total negativo (< 0)'
                 : tipo_saldo === 'solo_positivos'
-                  ? 'en stock positivo'
-                  : 'con saldo distinto de 0'
+                  ? 'con saldo total positivo (> 0)'
+                  : 'con saldo total distinto de 0'
+            const comboTexto = !incluir_combos ? ' (excluyendo combos)' : ''
             return {
               afectados: 0,
               total_regularizados: 0,
-              message: `No hay productos ${filtroTexto} para reiniciar en este almacén/sucursal.`
+              productos_afectados: [],
+              message: `No hay productos ${filtroTexto}${comboTexto} para reiniciar en este almacén/sucursal.`
             }
           }
 
-          // Pre-cargar multiplicadores de presentaciones
-          const presIds = Array.from(new Set(filasConStock.map((f) => f.presentacion_id).filter(Boolean)))
-          let presMultiplicaMap = {}
-          if (presIds.length > 0) {
+          const presIdsParaNombres = Array.from(new Set(filasElegibles.map((f) => f.presentacion_id).filter(Boolean)))
+
+          const presNombresMap = {}
+          const presMultiplicaMap = {}
+          if (presIdsParaNombres.length > 0) {
             const presRows = await tx
               .select({
                 id: schema.presentaciones.id,
+                nombre: schema.presentaciones.nombre,
                 multiplica_por: schema.presentaciones.multiplica_por
               })
               .from(schema.presentaciones)
-              .where(inArray(schema.presentaciones.id, presIds))
+              .where(inArray(schema.presentaciones.id, presIdsParaNombres))
 
             presRows.forEach((pr) => {
+              presNombresMap[pr.id] = pr.nombre
               presMultiplicaMap[pr.id] = Math.max(1, Number(pr.multiplica_por || 1))
             })
           }
+
+          const filasConStock = filasElegibles.map((f) => ({
+            ...f,
+            producto_nombre: prodNombresMap[f.producto_id] || 'Sin nombre',
+            presentacion_nombre: presNombresMap[f.presentacion_id] || 'UNIDAD'
+          }))
 
           const docRef = 'REINICIO-MASIVO'
           const tipoTexto =
@@ -714,6 +769,7 @@ async function stockRoutes(fastify) {
           const conceptoRef = (motivo && motivo.trim()) || tipoTexto
 
           const idsAfectados = []
+          const detalleProductosReiniciados = []
 
           // 2. Por cada fila de stock_actual seleccionada:
           //    - Registrar el movimiento de regularización en tabla `stock` para dejar el saldo en 0
@@ -726,6 +782,18 @@ async function stockRoutes(fastify) {
             const tipoMov = saldoFilaInt > 0 ? 2 : 1 // Salida si había positivo, Entrada si había negativo
             const cantBaseAbsInt = Math.abs(saldoFilaInt)
             const cantAbsInt = Math.round(cantBaseAbsInt / multiplicaPor)
+            const saldoVisual = toVolumenVisual(saldoFilaInt, factorVolumen)
+
+            detalleProductosReiniciados.push({
+              stock_actual_id: fila.id,
+              producto_id: fila.producto_id,
+              producto_nombre: fila.producto_nombre || 'Sin nombre',
+              presentacion_id: fila.presentacion_id,
+              presentacion_nombre: fila.presentacion_nombre || 'UNIDAD',
+              saldo_anterior: saldoVisual,
+              saldo_nuevo: 0,
+              ajuste_aplicado: tipoMov === 1 ? `+${toVolumenVisual(cantBaseAbsInt, factorVolumen)}` : `-${toVolumenVisual(cantBaseAbsInt, factorVolumen)}`
+            })
 
             await tx.insert(schema.stock).values({
               producto_id: fila.producto_id,
@@ -745,20 +813,31 @@ async function stockRoutes(fastify) {
             })
           }
 
-          // 3. Poner en 0 únicamente las filas específicas afectadas
+          // 3. Poner en 0 TODAS las filas de stock_actual de los productos afectados en este almacén/sucursal
+          // Evita saldos huérfanos entre diferentes presentaciones del mismo producto
           if (idsAfectados.length > 0) {
+            const prodIdsAfectados = Array.from(new Set(filasConStock.map((f) => f.producto_id).filter(Boolean)))
+            const resetConds = [
+              eq(schema.stock_actual.branch_id, branchId),
+              inArray(schema.stock_actual.producto_id, prodIdsAfectados)
+            ]
+            if (almacen_id) {
+              resetConds.push(eq(schema.stock_actual.almacen_id, almacen_id))
+            }
+
             await tx
               .update(schema.stock_actual)
               .set({
                 saldo_actual: 0,
                 updated_at: sql`NOW()`
               })
-              .where(inArray(schema.stock_actual.id, idsAfectados))
+              .where(and(...resetConds))
           }
 
           return {
             afectados: idsAfectados.length,
             total_regularizados: idsAfectados.length,
+            productos_afectados: detalleProductosReiniciados,
             message: `Se han reiniciado ${idsAfectados.length} registros de stock a 0 correctamente.`
           }
         })
@@ -853,15 +932,18 @@ async function stockRoutes(fastify) {
 
           let totalActualizados = 0
 
+          const isUUID = (str) =>
+            Boolean(str && typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str))
+
           for (const item of items) {
             const prodId = item.producto_id
-            if (!prodId) continue
+            if (!prodId || !isUUID(prodId)) continue
 
             const cantVisual = Number(item.cantidad)
             if (isNaN(cantVisual) || cantVisual < 0) continue
 
             // Obtener o resolver la presentación principal (multiplica_por = 1 o la primera)
-            let presId = item.presentacion_id
+            let presId = isUUID(item.presentacion_id) ? item.presentacion_id : null
             let multiplicaPor = 1
 
             if (presId) {
@@ -870,9 +952,15 @@ async function stockRoutes(fastify) {
                 .from(schema.presentaciones)
                 .where(eq(schema.presentaciones.id, presId))
                 .limit(1)
-              multiplicaPor = Math.max(1, Number(pInfo?.multiplica_por || 1))
-            } else {
-              // Buscar presentación principal del producto
+              if (pInfo) {
+                multiplicaPor = Math.max(1, Number(pInfo.multiplica_por || 1))
+              } else {
+                presId = null
+              }
+            }
+
+            if (!presId) {
+              // Buscar presentación principal del producto en la tabla presentaciones
               const [pInfo] = await tx
                 .select({
                   id: schema.presentaciones.id,
