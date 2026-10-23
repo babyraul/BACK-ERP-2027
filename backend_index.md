@@ -1,8 +1,9 @@
 # 🗺️ Índice y Mapa de Referencia Técnica — Backend (SERVER_NUBE)
 
-> **Documento:** Mapa conceptual, catálogo de endpoints, arquitectura y variables de entorno.  
+> **Documento:** Mapa conceptual, catálogo de endpoints, arquitectura modular DDD y variables de entorno.  
 > **Proyecto:** pERP-2027 · Backend (`BACK`)  
-> **Stack Principal:** Node.js (CommonJS) · Fastify v4 · Drizzle ORM · PostgreSQL 18 (`postgres.js`) · Vitest · PM2
+> **Stack Principal:** Node.js (CommonJS) · Fastify v4 · Drizzle ORM · PostgreSQL 18 (`postgres.js`) · Vitest · PM2  
+> **Arquitectura:** Vertical Slice Architecture / Domain-Driven Design (DDD)
 
 ---
 
@@ -15,19 +16,23 @@
    - [2.4 Empresas y Asignación de Módulos (`/api/empresas`)](#24-empresas-y-asignación-de-módulos-apiempresas)
    - [2.5 Sucursales (`/api/sucursales`)](#25-sucursales-apisucursales)
    - [2.6 Almacenes (`/api/almacenes`)](#26-almacenes-apialmacenes)
-   - [2.7 Cajas y Series de Facturación (`/api/cajas`)](#27-cajas-y-series-de-facturación-apicajas)
+   - [2.7 Cajas, Turnos y Conciliación (`/api/cajas`)](#27-cajas-turnos-y-conciliación-apicajas)
    - [2.8 Tipos de Comprobante (`/api/tipos-comprobante`)](#28-tipos-de-comprobante-apitipos-comprobante)
    - [2.9 Módulos del Sistema y Backfill (`/api/modulos`)](#29-módulos-del-sistema-y-backfill-apimodulos)
    - [2.10 Roles y Permisos Granulares (`/api/roles`)](#210-roles-y-permisos-granulares-apiroles)
    - [2.11 Permisos del Sistema (`/api/permisos`)](#211-permisos-del-sistema-apipermisos)
    - [2.12 Clientes (`/api/clientes`)](#212-clientes-apiclientes)
-   - [2.13 Productos (`/api/productos`)](#213-productos-apiproductos)
-   - [2.14 Ventas (`/api/ventas`)](#214-ventas-apiventas)
-   - [2.15 Sincronización Servidor-a-Servidor (`/api/sync`)](#215-sincronización-servidor-a-servidor-apisync)
-   - [2.16 Utilidades y Consulta RUC/DNI (`/api/utils`)](#216-utilidades-y-consulta-rucdni-apiutils)
-3. [Ubicación de Controladores, Modelos y Rutas](#3-ubicación-de-controladores-modelos-y-rutas)
-   - [3.1 Capa de Rutas (`src/routes/`)](#31-capa-de-rutas-srcroutes)
-   - [3.2 Capa de Controladores y Lógica de Negocio (`src/controllers/`, `src/services/`, `src/core/`)](#32-capa-de-controladores-y-lógica-de-negocio)
+   - [2.13 Productos y Catálogo Comercial (`/api/productos`)](#213-productos-y-catálogo-comercial-apiproductos)
+   - [2.14 Proveedores (`/api/proveedores`)](#214-proveedores-apiproveedores)
+   - [2.15 Control de Stock y Kárdex (`/api/stock`)](#215-control-de-stock-y-kárdex-apistock)
+   - [2.16 Combos Promocionales (`/api/combos`)](#216-combos-promocionales-apicombos)
+   - [2.17 Pre-Ventas (`/api/preventas`)](#217-pre-ventas-apipreventas)
+   - [2.18 Ventas y Facturación (`/api/ventas`)](#218-ventas-y-facturación-apiventas)
+   - [2.19 Sincronización Servidor-a-Servidor (`/api/sync`)](#219-sincronización-servidor-a-servidor-apisync)
+   - [2.20 Utilidades y Consulta RUC/DNI (`/api/utils`)](#220-utilidades-y-consulta-rucdni-apiutils)
+3. [Ubicación de Módulos, Controladores, Servicios y Repositorios](#3-ubicación-de-módulos-controladores-servicios-y-repositorios)
+   - [3.1 Capa de Módulos de Dominio (`src/modules/`)](#31-capa-de-módulos-de-dominio-srcmodules)
+   - [3.2 Regla de Negocio Crítica: Inactivación Visual (No Physical Delete)](#32-regla-de-negocio-crítica-inactivación-visual-no-physical-delete)
    - [3.3 Capa de Modelos y Base de Datos (`src/db/`)](#33-capa-de-modelos-y-base-de-datos-srcdb)
    - [3.4 Capa de Plugins Fastify (`src/plugins/`)](#34-capa-de-plugins-fastify-srcplugins)
 4. [Variables de Entorno Requeridas](#4-variables-de-entorno-requeridas)
@@ -38,7 +43,7 @@
 
 ## 1. Estructura del Árbol de Directorios
 
-El siguiente diagrama detalla la jerarquía de archivos y carpetas del subdirectorio `BACK/`:
+El siguiente diagrama detalla la jerarquía consolidada del backend bajo **Vertical Slice Architecture**:
 
 ```text
 BACK/
@@ -54,19 +59,19 @@ BACK/
 ├── run-init.sh                  # Script bash para creación y sembrado de la BD
 ├── db-init.sql                  # Definiciones DDL iniciales en SQL puro
 ├── db-seed.sql                  # Datos semilla (SuperAdmin, catálogos SUNAT, afectaciones)
+├── ARQUITECTURA_ESCALABILIDAD.md# Especificación de arquitectura DDD vertical y fases
+├── backend_index.md             # Este documento de índice y arquitectura
 ├── README.md                    # Documento de bienvenida del backend
 │
 ├── tests/                       # Pruebas automatizadas con Vitest
 │   └── unit/
-│       ├── auth_service.test.js      # Pruebas unitarias del servicio de autenticación y árbol
+│       ├── auth_service.test.js      # Pruebas del servicio de autenticación y árbol
 │       ├── rbac.permissions.test.js  # Pruebas de autorización RBAC dinámica
-│       ├── rls.isolation.test.js     # Pruebas de aislamiento multi-tenant (Row-Level Security)
-│       └── usuarios.security.test.js # Pruebas de jerarquía de niveles y seguridad en usuarios
+│       ├── rls.isolation.test.js     # Pruebas de aislamiento multi-tenant (RLS)
+│       └── usuarios.security.test.js # Pruebas de jerarquía de niveles en usuarios
 │
 └── src/                         # Código fuente del servidor
-    ├── app.js                   # Factoría de la instancia Fastify y registro central de plugins/rutas
-    │
-    ├── controllers/             # Directorio reservado para controladores dedicados desacoplados
+    ├── app.js                   # Factoría Fastify y registro central de plugins/rutas
     │
     ├── core/                    # Módulos transversales y utilidades base del framework
     │   ├── crud.factory.js      # Generador automatizado de rutas CRUD estándar con RBAC y RLS
@@ -76,14 +81,8 @@ BACK/
     ├── db/                      # Capa de persistencia y esquemas ORM
     │   ├── index.js             # Inicialización de Drizzle con cliente Postgres y esquemas
     │   ├── schema.js            # Definición completa de ~87 esquemas de tablas Drizzle (PG)
-    │   ├── relations.js         # Definición de relaciones entre tablas Drizzle
+    │   ├── relations.js         # Relaciones entre tablas Drizzle
     │   └── migrations/          # Archivos de migración generados por drizzle-kit
-    │       ├── 0000_magenta_mole_man.sql
-    │       ├── 0001_shiny_epoch.sql
-    │       ├── 0002_superb_red_shift.sql
-    │       ├── schema.ts
-    │       ├── relations.ts
-    │       └── meta/            # Diarios de migración y snapshots JSON
     │
     ├── plugins/                 # Plugins modulares de Fastify
     │   ├── auth.js              # Plugin JWT, decorators: authenticate, authenticateApiKey, authorize
@@ -91,441 +90,427 @@ BACK/
     │   ├── db.js                # Conexión pool a PostgreSQL 18 con verificación al arranque
     │   └── sensible.js          # Integración de @fastify/sensible (HTTP status helpers)
     │
-    ├── routes/                  # Definición modular de rutas y controladores HTTP
-    │   ├── auth.routes.js            # Endpoints de autenticación, sesión, sucursal activa y menú
-    │   ├── cajas.routes.js           # Endpoints CRUD de cajas y series (mediante crud.factory)
-    │   ├── clientes.routes.js        # Endpoints CRUD para gestión de clientes
-    │   ├── empresas.routes.js        # CRUD de empresas, creación en cascada y módulos asignados
-    │   ├── gestion.routes.js         # Enrutador agrupador para catálogos y gestión administrativa
-    │   ├── health.routes.js          # Diagnóstico de estado del servidor y PostgreSQL
-    │   ├── modulos.routes.js         # Gestión de módulos, árbol jerárquico y permisos CRUD
-    │   ├── productos.routes.js       # Endpoints CRUD para gestión de catálogo de productos
-    │   ├── roles.routes.js           # Gestión de roles, niveles jerárquicos y asignación de permisos
-    │   ├── sucursales.routes.js      # Endpoints CRUD para sucursales multi-empresa
-    │   ├── sync.routes.js            # Sincronización server-to-server (push/pull/status)
-    │   ├── tiposComprobante.routes.js# Catálogo de tipos de comprobantes SUNAT
-    │   ├── usuarios.routes.js        # Gestión de usuarios, jerarquía de roles y accesos multi-tenant
-    │   ├── utils.routes.js           # Servicios de consulta a APIs externas (RUC / DNI)
-    │   └── ventas.routes.js          # Endpoints para registro y facturación de ventas
-    │
     ├── utils/                   # Utilidades globales del servidor
-    │   └── factores.js               # Extracción y conversión de factores del sistema (PRECIO x100, VOLUMEN x1000000)
+    │   └── factores.js          # Conversión de factores de precio (x100) y volumen (x1,000,000)
     │
-    └── services/                # Capa de servicios con reglas de negocio desacopladas
-        ├── api_peru_service.js       # Consumo de API externa de RUC/DNI con fallback resiliente
-        └── auth_service.js           # Lógica de login, refresh, permisos O(1), conmutación de sede y menú
+    ├── services/                # Servicios transversales de infraestructura
+    │   ├── api_peru_service.js  # Consumo de API externa de RUC/DNI con fallback resiliente
+    │   └── auth_service.js      # Lógica de login, refresh, permisos O(1), conmutación de sede y árbol
+    │
+    ├── workers/                 # Procesos en segundo plano / Cron jobs
+    │   └── preventasExpirationWorker.js # Expiración automática de preventas vencidas
+    │
+    └── modules/                 # 🏛️ Vertical Slices / Dominios de Negocio (DDD)
+        ├── auth/                # Módulo de Autenticación y Sesiones
+        │   └── auth.routes.js
+        │
+        ├── caja/                # Dominio de Caja, Arqueos y Turnos
+        │   ├── cajas.routes.js
+        │   ├── controllers/
+        │   │   └── cajas.controller.js
+        │   ├── services/
+        │   │   ├── cajas.service.js
+        │   │   ├── aperturaTurno.service.js   # Caso de uso: Apertura atómica
+        │   │   └── cierreTurno.service.js     # Caso de uso: Cierre analítico y arqueo
+        │   └── repositories/
+        │       └── cajas.repository.js
+        │
+        ├── clientes/            # Dominio de Clientes y Límites de Crédito
+        │   ├── clientes.routes.js
+        │   ├── controllers/
+        │   │   └── clientes.controller.js
+        │   ├── services/
+        │   │   └── clientes.service.js
+        │   └── repositories/
+        │       └── clientes.repository.js
+        │
+        ├── combos/              # Dominio de Combos Promocionales
+        │   ├── combos.routes.js
+        │   ├── controllers/
+        │   │   └── combos.controller.js
+        │   ├── services/
+        │   │   └── combos.service.js
+        │   └── repositories/
+        │       └── combos.repository.js
+        │
+        ├── manager/             # Dominio de Gestión y Administración Enterprise
+        │   ├── gestion.routes.js     # Router agrupador administrativo (/api)
+        │   ├── empresas.routes.js, sucursales.routes.js, roles.routes.js, modulos.routes.js, usuarios.routes.js
+        │   ├── controllers/
+        │   │   ├── empresas.controller.js, sucursales.controller.js, roles.controller.js
+        │   │   ├── modulos.controller.js, usuarios.controller.js
+        │   ├── services/
+        │   │   ├── empresas.service.js, sucursales.service.js, roles.service.js
+        │   │   ├── modulos.service.js, usuarios.service.js
+        │   └── repositories/
+        │       ├── empresas.repository.js, sucursales.repository.js, roles.repository.js
+        │       ├── modulos.repository.js, usuarios.repository.js
+        │
+        ├── productos/           # Dominio de Catálogo de Productos y Presentaciones
+        │   ├── productos.routes.js
+        │   ├── controllers/
+        │   │   └── productos.controller.js
+        │   ├── services/
+        │   │   └── productos.service.js
+        │   └── repositories/
+        │       └── productos.repository.js
+        │
+        ├── proveedores/         # Dominio de Proveedores
+        │   ├── proveedores.routes.js
+        │   ├── controllers/
+        │   │   └── proveedores.controller.js
+        │   ├── services/
+        │   │   └── proveedores.service.js
+        │   └── repositories/
+        │       └── proveedores.repository.js
+        │
+        ├── stock/               # Dominio de Control de Stock y Kárdex
+        │   ├── stock.routes.js
+        │   ├── controllers/
+        │   │   └── stock.controller.js
+        │   ├── services/
+        │   │   ├── stock.service.js
+        │   │   ├── reinicioStock.service.js   # Caso de uso: Reinicio masivo
+        │   │   └── cargaMasiva.service.js     # Caso de uso: Inventario inicial por lotes
+        │   └── repositories/
+        │       ├── stock.repository.js
+        │       └── kardex.repository.js
+        │
+        └── ventas/              # Dominio de Ventas y Pre-Ventas
+            ├── ventas.routes.js
+            ├── preventas.routes.js
+            ├── controllers/
+            │   ├── ventas.controller.js
+            │   └── preventas.controller.js
+            ├── services/
+            │   ├── ventas.service.js
+            │   ├── registrarVenta.service.js  # Caso de uso: Emisión y cobro atómico
+            │   ├── anularVenta.service.js     # Caso de uso: Anulación y reversión de stock
+            │   └── preventas.service.js       # Caso de uso: Pedidos previos y combos
+            └── repositories/
+                ├── ventas.repository.js
+                └── preventas.repository.js
 ```
 
 ---
 
 ## 2. Catálogo Exhaustivo de Endpoints de la API
 
-> **Nota sobre prefijos:**  
-> En `src/app.js`, la mayoría de las rutas se montan con `/api/<recurso>`.  
-> Las rutas administrativas están agrupadas dentro de `src/routes/gestion.routes.js` montado en `app.js` bajo el prefijo `/api` (lo que resulta en `/api/empresas`, `/api/sucursales`, `/api/almacenes`, `/api/modulos`, `/api/cajas`, `/api/tipos-comprobante`, `/api/roles`, `/api/permisos`).
-
----
-
 ### 2.1 Salud y Diagnóstico (`/api/health`)
 *Archivo: `src/routes/health.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/health` | Pública | Ninguno | Verifica disponibilidad del servidor Node.js, tiempo activo (`uptime`) y ejecuta `SELECT 1` para validar la conexión con PostgreSQL 18. |
+| `GET` | `/api/health` | Pública | Ninguno | Diagnóstico de estado del proceso Node.js y latencia de conexión a PostgreSQL. |
 
 ---
 
 ### 2.2 Autenticación y Sesión (`/api/auth`)
-*Archivo: `src/routes/auth.routes.js`* · *Servicio: `src/services/auth_service.js`*
+*Módulo: `src/modules/auth/auth.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `POST` | `/api/auth/login` | Pública | Ninguno | Inicia sesión verificando credenciales con `bcrypt`. Resuelve el `active_acceso` (empresa y sucursal predeterminada), calcula permisos O(1) e inyecta el token de acceso JWT y refresh token. **Body:** `{ usuario, password }`. |
-| `POST` | `/api/auth/refresh` | Pública | Ninguno | Emite un nuevo `access_token` utilizando un token de actualización vigente almacenado en memoria. **Body:** `{ refresh_token }`. |
-| `POST` | `/api/auth/logout` | Bearer JWT | Ninguno | Invalida el `refresh_token` activo en el almacén de sesiones del servidor para el usuario autenticado. |
-| `GET` | `/api/auth/me` | Bearer JWT | Ninguno | Retorna los datos de identidad y configuración del usuario conectado (omite el hash de contraseña). |
-| `POST` | `/api/auth/switch-branch` | Bearer JWT | Ninguno | Conmuta la empresa/sucursal activa del usuario sin cerrar sesión. Regenera el JWT con el nuevo `active_acceso`, `branch_id`, `empresa_id` y su correspondiente conjunto de permisos. **Body:** `{ branch_id: uuid }`. |
-| `GET` | `/api/auth/menu` | Bearer JWT | Ninguno | Genera el árbol jerárquico recursivo de módulos/menús al que el usuario tiene acceso según los módulos activos de su empresa y los permisos asignados a su rol. **Headers opcionales:** `x-empresa-id`. |
+| `POST` | `/api/auth/login` | Pública | Ninguno | Inicio de sesión con usuario y password. Valida bloqueo por intentos y emite par JWT (`access_token` y `refresh_token`). |
+| `POST` | `/api/auth/refresh` | Pública | Ninguno | Emisión de nuevo token de acceso a partir de un refresh token válido. |
+| `GET` | `/api/auth/me` | Bearer JWT | Autenticado | Devuelve perfil del usuario activo, acceso actual, empresa y branch. |
+| `POST` | `/api/auth/switch-branch` | Bearer JWT | Autenticado | Conmuta la sede activa del usuario, regenera el JWT con los nuevos permisos asignados. |
+| `GET` | `/api/auth/menu` | Bearer JWT | Autenticado | Retorna el árbol recursivo de módulos y menús autorizados para la sesión actual. |
+| `POST` | `/api/auth/logout` | Bearer JWT | Autenticado | Cierre de sesión e invalidación de token activo. |
 
 ---
 
 ### 2.3 Usuarios y Accesos Multi-Tenant (`/api/usuarios`)
-*Archivo: `src/routes/usuarios.routes.js`*
+*Módulo: `src/modules/manager/usuarios.routes.js`*
 
-*Seguridad base: Protegido por el hook `fastify.authorize`. Infiere permisos `usuarios.<accion>` y aplica Row-Level Security (RLS) y filtro de jerarquía de niveles.*
-
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/usuarios` | Bearer JWT | `usuarios.ver` | Lista los usuarios. Si el usuario no es SuperAdmin, aplica RLS aislando solo los usuarios de su empresa cuyo mejor rol tenga un nivel estrictamente inferior (mayor valor numérico) al del usuario solicitante. |
-| `GET` | `/api/usuarios/:id` | Bearer JWT | `usuarios.ver` | Obtiene el detalle de un usuario específico por su UUID (excluye el password). |
-| `POST` | `/api/usuarios` | Bearer JWT | `usuarios.crear` | Crea un nuevo usuario. Hashea la contraseña con `bcrypt`. Si se envían `empresa_id`, `branch_id` y `rol_id`, crea en una misma transacción su acceso inicial predeterminado. Valida que el rol asignado no tenga un nivel igual o superior al creador. |
-| `PUT` | `/api/usuarios/:id` | Bearer JWT | `usuarios.editar` | Actualiza los datos de un usuario. Si se incluye contraseña, la vuelve a hashear; si no, la preserva. Valida que el nombre de usuario sea único. |
-| `DELETE` | `/api/usuarios/:id` | Bearer JWT | `usuarios.eliminar` | Elimina o da de baja lógica al usuario según la configuración de la tabla. |
-| `GET` | `/api/usuarios/:id/accesos` | Bearer JWT | `usuarios.ver` | Retorna el listado de empresas, sucursales y roles a los que el usuario tiene acceso concedido, con joins a tablas maestras. |
-| `POST` | `/api/usuarios/:id/accesos` | Bearer JWT | `usuarios.editar` | Asocia una nueva sucursal y rol al usuario. Valida duplicados por sucursal y respeta la jerarquía de niveles del rol. Si se marca como predeterminado, desmarca los previos. |
-| `PUT` | `/api/usuarios/:id/accesos/:accesoId` | Bearer JWT | `usuarios.editar` | Modifica una asignación de acceso (rol o predeterminado). Impide modificar accesos con rol de nivel igual o superior al usuario logueado. |
-| `DELETE` | `/api/usuarios/:id/accesos/:accesoId` | Bearer JWT | `usuarios.editar` | Revoca el acceso a una sucursal para el usuario. Valida jerarquía del rol asociado antes de eliminar. |
+| `GET` | `/api/usuarios` | Bearer JWT | `usuarios.ver` | Lista usuarios filtrados por RLS de empresa. |
+| `GET` | `/api/usuarios/:id` | Bearer JWT | `usuarios.ver` | Obtiene el detalle de un usuario y sus accesos asignados. |
+| `POST` | `/api/usuarios` | Bearer JWT | `usuarios.crear` | Crea un usuario con hashing bcrypt y asigna su acceso por defecto bajo jerarquía de nivel. |
+| `PUT` | `/api/usuarios/:id` | Bearer JWT | `usuarios.editar` | Actualiza datos del usuario, password (si aplica) y roles respetando jerarquía. |
+| `DELETE` | `/api/usuarios/:id` | Bearer JWT | `usuarios.eliminar` | **Inactivación visual:** Cambia `activo = false` en `usuarios` y `usuario_accesos`. |
 
 ---
 
 ### 2.4 Empresas y Asignación de Módulos (`/api/empresas`)
-*Archivo: `src/routes/empresas.routes.js`*
+*Módulo: `src/modules/manager/empresas.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/empresas` | Bearer JWT | `empresas.ver` | Lista empresas del sistema con join a `ubigeo`. Con RLS: si no es SuperAdmin, devuelve exclusivamente la empresa correspondiente al `active_acceso`. |
-| `GET` | `/api/empresas/:id` | Bearer JWT | `empresas.ver` | Obtiene los datos detallados de una empresa por ID. |
-| `POST` | `/api/empresas` | Bearer JWT | `empresas.crear` | **Creación en Cascada Transaccional:** Inserta la Empresa, crea automáticamente su primera Sucursal ("SEDE PRINCIPAL", anexo 0000) y su Almacén principal ("ALMACÉN PRINCIPAL"). |
-| `PUT` | `/api/empresas/:id` | Bearer JWT | `empresas.editar` | Actualiza la información tributaria, comercial y de contacto de la empresa. |
-| `DELETE` | `/api/empresas/:id` | Bearer JWT | `empresas.eliminar` | Elimina o desactiva la empresa indicada. |
-| `GET` | `/api/empresas/:id/modulos` | Bearer JWT | `empresas.modulos` | Obtiene un array plano con los UUIDs de los módulos actualmente habilitados para la empresa indicada. |
-| `POST` | `/api/empresas/:id/modulos` | Bearer JWT | `empresas.modulos` | Reemplaza transaccionalmente los módulos contratados/habilitados para una empresa. **Body:** `{ modulosIds: [uuid, ...] }`. |
+| `GET` | `/api/empresas` | Bearer JWT | `empresas.ver` | Lista empresas activas. SuperAdmin visualiza todas; tenant solo la suya. |
+| `GET` | `/api/empresas/:id` | Bearer JWT | `empresas.ver` | Detalle de empresa con módulos habilitados. |
+| `POST` | `/api/empresas` | Bearer JWT | `empresas.crear` | Crea empresa en transacción atómica generando automáticamente sucursal principal y almacén base. |
+| `PUT` | `/api/empresas/:id` | Bearer JWT | `empresas.editar` | Actualiza datos fiscales y configuración de módulos asignados. |
+| `DELETE` | `/api/empresas/:id` | Bearer JWT | `empresas.eliminar` | **Inactivación visual:** Cambia `activo = false` en la empresa y sus sedes vinculadas. |
 
 ---
 
 ### 2.5 Sucursales (`/api/sucursales`)
-*Archivo: `src/routes/sucursales.routes.js`*
+*Módulo: `src/modules/manager/sucursales.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/sucursales` | Bearer JWT | `sucursales.ver` | Lista sucursales con join a `ubigeo`. Aplica RLS filtrando automáticamente por `request.user.empresa_id` para usuarios que no sean SuperAdmin. |
-| `GET` | `/api/sucursales/:id` | Bearer JWT | `sucursales.ver` | Obtiene la ficha completa de una sucursal. |
-| `POST` | `/api/sucursales` | Bearer JWT | `sucursales.crear` | Registra una nueva sucursal/sede anexa vinculada a una empresa. |
-| `PUT` | `/api/sucursales/:id` | Bearer JWT | `sucursales.editar` | Actualiza credenciales SIRE, dirección, anexo o datos comerciales de la sucursal. |
-| `DELETE` | `/api/sucursales/:id` | Bearer JWT | `sucursales.eliminar` | Da de baja o elimina la sucursal. |
+| `GET` | `/api/sucursales` | Bearer JWT | `sucursales.ver` | Lista sucursales por empresa con credenciales SIRE y ubigeo. |
+| `GET` | `/api/sucursales/:id` | Bearer JWT | `sucursales.ver` | Detalle de una sucursal específica. |
+| `POST` | `/api/sucursales` | Bearer JWT | `sucursales.crear` | Registra una nueva sucursal y su almacén asociado. |
+| `PUT` | `/api/sucursales/:id` | Bearer JWT | `sucursales.editar` | Actualiza datos de la sucursal y configuración SIRE SUNAT. |
+| `DELETE` | `/api/sucursales/:id` | Bearer JWT | `sucursales.eliminar` | **Inactivación visual:** Cambia `activo = false` en la sucursal. |
 
 ---
 
 ### 2.6 Almacenes (`/api/almacenes`)
-*Generado vía: `src/core/crud.factory.js` sobre `schema.almacenes`*
+*Hub: `src/routes/gestion.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/almacenes` | Bearer JWT | `almacenes.ver` | Lista almacenes con soporte de filtros query y RLS por `branch_id`. |
-| `GET` | `/api/almacenes/:id` | Bearer JWT | `almacenes.ver` | Obtiene un almacén por su UUID. |
-| `POST` | `/api/almacenes` | Bearer JWT | `almacenes.crear` | Crea un almacén inyectando el `branch_id` del token si no es SuperAdmin. |
-| `PUT` | `/api/almacenes/:id` | Bearer JWT | `almacenes.editar` | Modifica nombre, dirección o estado del almacén. |
-| `DELETE` | `/api/almacenes/:id` | Bearer JWT | `almacenes.eliminar` | Baja lógica o eliminación física del almacén. |
+| `GET` | `/api/almacenes` | Bearer JWT | `almacenes.ver` | Lista almacenes físicos por sucursal. |
+| `POST` | `/api/almacenes` | Bearer JWT | `almacenes.crear` | Registra un nuevo almacén. |
+| `PUT` | `/api/almacenes/:id` | Bearer JWT | `almacenes.editar` | Actualiza nombre, dirección o estado del almacén. |
+| `DELETE` | `/api/almacenes/:id` | Bearer JWT | `almacenes.eliminar` | **Inactivación visual:** Cambia `activo = false`. |
 
 ---
 
-### 2.7 Cajas, Turnos y Arqueos (`/api/cajas`)
-*Archivo: `src/routes/cajas.routes.js`* · *Maneja `caja_serie_correlativo`, `caja_turnos`, `caja_turno_pagos` y `caja_turnos_resumen`*
+### 2.7 Cajas, Turnos y Conciliación (`/api/cajas`)
+*Módulo: `src/modules/caja/cajas.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/cajas` | Bearer JWT | `cajas.ver` | Lista series, impresoras y puntos de venta de la sucursal activa con join a `tipo_comprobante`. |
-| `GET` | `/api/cajas/:id` | Bearer JWT | `cajas.ver` | Obtiene la configuración de una serie/caja específica. |
-| `POST` | `/api/cajas` | Bearer JWT | `cajas.crear` | Da de alta una nueva serie para boleta, factura o ticket vinculada a un tipo de comprobante. |
-| `PUT` | `/api/cajas/:id` | Bearer JWT | `cajas.editar` | Actualiza correlativo actual, nombre o estado de la serie. |
-| `DELETE` | `/api/cajas/:id` | Bearer JWT | `cajas.eliminar` | Desactiva o elimina la serie de facturación. |
-| `GET` | `/api/cajas/configuradas` | Bearer JWT | `cajas.ver` | Lista consolidada de cajas físicas (`identificador_caja`) para la apertura de turnos, indicando sus series autorizadas, tipo de caja y disponibilidad (si está libre u ocupada por otro cajero). |
-| `GET` | `/api/cajas/turnos` | Bearer JWT | `cajas.ver` | Historial de turnos con filtros query (`estado`, `fecha`, `usuario_id`, `identificador_caja`) con join a usuario y fondo de apertura (`monto_apertura`). |
-| `GET` | `/api/cajas/turnos/activo` | Bearer JWT | `cajas.ver` | Retorna el turno actual en estado `ABIERTA` para el usuario y sucursal actual, junto con desglose de métodos de pago (`caja_turno_pagos`) y efectivo total en caja. |
-| `GET` | `/api/cajas/turnos/:id` | Bearer JWT | `cajas.ver` | Detalle completo de un turno: metadatos, tabla de `caja_turno_pagos`, resumen analítico (`caja_turnos_resumen`) y lista de comprobantes emitidos. |
-| `POST` | `/api/cajas/turnos/apertura` | Bearer JWT | `cajas.crear` | **Apertura de Caja Transaccional:** Valida existencia de la caja en `caja_serie_correlativo`, previene turnos concurrentes en la misma caja física, inserta en `caja_turnos` con su `monto_apertura` en efectivo e inicializa registros en `caja_turno_pagos` limpios para todos los métodos de pago. |
-| `GET` | `/api/cajas/turnos/:id/movimientos` | Bearer JWT | `cajas.ver` | Consulta el historial de movimientos manuales (ingresos/egresos) registrados en la gaveta del turno. |
-| `POST` | `/api/cajas/turnos/:id/movimientos` | Bearer JWT | `cajas.editar` | Registra transaccionalmente una entrada o salida de dinero en `caja_movimientos` con validación de saldo disponible en efectivo (evita saldos negativos), hora en base de datos (`NOW()`) e inserción vinculada en `caja_arqueos` por movimiento. |
-| `GET` | `/api/cajas/movimientos/:movimientoId/arqueo` | Bearer JWT | `cajas.ver` | Consulta el arqueo y desglose de denominaciones (`caja_arqueos`) correspondiente a un movimiento manual específico. |
-| `GET` | `/api/cajas/turnos/:id/arqueos` | Bearer JWT | `cajas.ver` | Consulta los arqueos de denominaciones (`caja_arqueos`) correspondientes a los movimientos del turno. |
-| `POST` | `/api/cajas/turnos/:id/cierre` | Bearer JWT | `cajas.editar` | **Arqueo, Cierre y Resumen Transaccional:** Agrupa las ventas del turno y movimientos manuales, concilia y actualiza `caja_turno_pagos`, genera el snapshot analítico exhaustivo en `caja_turnos_resumen` (totales por comprobante, SUNAT, anulaciones, gravado/IGV, conteos y JSONBs) con `NOW()` y cambia el estado a `CERRADA`. |
+| `GET` | `/api/cajas` | Bearer JWT | `cajas.ver` | Lista series de facturación y correlativos por caja/sucursal. |
+| `GET` | `/api/cajas/configuradas` | Bearer JWT | `cajas.ver` | Agrupación estructurada de cajas físicas y series activas. |
+| `POST` | `/api/cajas` | Bearer JWT | `cajas.crear` | Registra una serie y correlativo asignado a caja. |
+| `PUT` | `/api/cajas/:id` | Bearer JWT | `cajas.editar` | Actualiza parámetros de la serie de caja. |
+| `DELETE` | `/api/cajas/:id` | Bearer JWT | `cajas.eliminar` | **Inactivación visual:** Cambia `activo = false` en la serie. |
+| `GET` | `/api/cajas/turnos` | Bearer JWT | `cajas.ver` | Listado histórico de turnos con montos formateados. |
+| `GET` | `/api/cajas/turnos/activo` | Bearer JWT | `cajas.ver` | Consulta el turno abierto del usuario actual y saldos esperados. |
+| `GET` | `/api/cajas/turnos/:id` | Bearer JWT | `cajas.ver` | Detalle analítico del turno (ventas, pagos, arqueos, resumen). |
+| `POST` | `/api/cajas/turnos/apertura` | Bearer JWT | `cajas.crear` | **Apertura de turno:** Inserción atómica en `caja_turnos`, inicialización de `caja_turnos_resumen` y `caja_turno_pagos`. |
+| `GET` | `/api/cajas/turnos/:id/movimientos` | Bearer JWT | `cajas.ver` | Lista ingresos y egresos manuales de efectivo. |
+| `POST` | `/api/cajas/turnos/:id/movimientos` | Bearer JWT | `cajas.crear` | Registra movimiento manual con validación de saldo disponible y desglose de arqueo. |
+| `GET` | `/api/cajas/movimientos/:movimientoId/arqueo` | Bearer JWT | `cajas.ver` | Obtiene el conteo de billetes/monedas del movimiento. |
+| `GET` | `/api/cajas/turnos/:id/arqueos` | Bearer JWT | `cajas.ver` | Lista arqueos físicos realizados en el turno. |
+| `POST` | `/api/cajas/turnos/:id/cierre` | Bearer JWT | `cajas.editar` | **Cierre y Conciliación:** Valida `VAL-DUR-02`, concilia ventas vs dinero declarado, genera resumen fiscal y asienta denominaciones. |
 
 ---
 
-### 2.8 Tablas Fijas y Catálogos SUNAT (`/api/tipos-*`)
-*Archivo: `src/routes/tablasFijas.routes.js`* · *Generado vía: `crud.factory.js` sobre tablas maestras con `publicRead: true`*
+### 2.8 Tipos de Comprobante (`/api/tipos-comprobante`)
+*Hub: `src/routes/gestion.routes.js`*
 
-Centraliza todos los catálogos estáticos y tablas fijas del sistema y de SUNAT con acceso de lectura libre para cualquier usuario autenticado (`publicRead: true`), eliminando la necesidad de permisos granulares por módulo.
-
-| Endpoint Base | Tabla Schema | Catálogo / Propósito |
-| :--- | :--- | :--- |
-| `GET /api/tipos-comprobante` | `tipo_comprobante` | Factura (`01`), Boleta (`03`), Nota de Crédito (`07`), etc. |
-| `GET /api/tipos-documento` | `tipo_documento` | DNI (`1`), RUC (`6`), Pasaporte (`7`), Carné Extranjería (`4`), etc. |
-| `GET /api/tipos-afectacion-igv` | `tipo_afectacion_igv` | Gravado (`10`), Exonerado (`20`), Inafecto (`30`), Exportación (`40`), etc. |
-| `GET /api/tipos-unidades-medida` | `tipo_unidades_medida` | Unidades comerciales SUNAT (`NIU`, `KGM`, `LTR`, `ZZ`, etc.). |
-| `GET /api/tipos-moneda` | `tipo_moneda` | Monedas internacionales (`PEN`, `USD`, `EUR`). |
-| `GET /api/tipos-metodo-pago` | `tipo_metodo_pago` | Medios de pago (`Efectivo`, `Yape`, `Plin`, `Transferencia`, etc.). |
-| `GET /api/tipos-pago` | `tipo_pago` | Condiciones de pago comercial (`Contado`, `Crédito`). |
-| `GET /api/tipos-operacion` | `tipo_operacion` | Operaciones de venta SUNAT (`Venta Interna`, `Exportación`, etc.). |
-| `GET /api/tipos-tributos` | `tipo_tributos` | Tributos e impuestos fiscales (`IGV`, `ISC`, `IVAP`). |
-| `GET /api/tipos-existencia` | `tipo_existencia` | Tipos de inventario (`Mercadería`, `Materia Prima`, `Envases`, etc.). |
-| `GET /api/tipos-impuesto` | `tipo_impuesto` | Impuestos parametrizados y alícuotas del sistema. |
-| `GET /api/tipos-factores` | `tipo_factores` | Factores de conversión globales (`PRECIO`: 100 para trabajar en céntimos; `VOLUMEN`: 1000000 para cantidades). |
-| `GET /api/tipos-stock` | `tipo_stock` | Estados de inventario (`Físico`, `Comprometido`). |
-| `GET /api/tipos-motivo-traslado` | `tipo_motivo_traslado` | Motivos de guías de remisión (`Venta`, `Compra`, `Traslado sede`). |
-| `GET /api/tipos-detraccion` | `tipo_codigos_detraccion` | Bienes y servicios sujetos al SPOT / Detracciones SUNAT. |
-| `GET /api/tipos-cambio` | `tipo_cambio` | Histórico y cotización oficial de tipo de cambio. |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/api/tipos-comprobante` | Bearer JWT | Autenticado | Catálogo SUNAT (01 Factura, 03 Boleta, 07 NC, 08 ND, 09 Guía, VL Vale). |
 
 ---
 
 ### 2.9 Módulos del Sistema y Backfill (`/api/modulos`)
-*Archivo: `src/routes/modulos.routes.js`*
+*Módulo: `src/modules/manager/modulos.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/modulos` | Bearer JWT | `roles.ver` o SuperAdmin | Lista todos los módulos y menús organizados jerárquicamente (padres primero, luego sus hijos ordenados por `orden`). Utilizado para armar la matriz de permisos en la UI de Roles. |
-| `GET` | `/api/modulos/:id` | Bearer JWT | Super Administrador | Obtiene la ficha de un módulo individual. |
-| `POST` | `/api/modulos` | Bearer JWT | Super Administrador | Crea un módulo o menú. Si `tipo === 'MENU'`, **genera automáticamente en una transacción los 4 permisos CRUD base:** `<codigo>.ver`, `<codigo>.crear`, `<codigo>.editar`, `<codigo>.eliminar`. |
-| `PUT` | `/api/modulos/:id` | Bearer JWT | Super Administrador | Actualiza ruta, icono, orden o datos de un módulo. |
-| `DELETE` | `/api/modulos/:id` | Bearer JWT | Super Administrador | Elimina el módulo del sistema. |
-| `POST` | `/api/modulos/sync-permisos` | Bearer JWT | Super Administrador | Endpoint de mantenimiento (Backfill) que recorre los menús existentes y asegura que todos tengan creados sus permisos CRUD en la tabla `permisos`. |
+| `GET` | `/api/modulos` | Bearer JWT | `modulos.ver` | Lista módulos en orden jerárquico. |
+| `GET` | `/api/modulos/tree` | Bearer JWT | `modulos.ver` | Retorna árbol recursivo de módulos y acciones hijas. |
+| `POST` | `/api/modulos` | Bearer JWT | `modulos.crear` | Crea módulo o acción e inserta automáticamente permisos CRUD asociados. |
+| `PUT` | `/api/modulos/:id` | Bearer JWT | `modulos.editar` | Actualiza nombre, ruta, icono o posición en el menú. |
+| `DELETE` | `/api/modulos/:id` | Bearer JWT | `modulos.eliminar` | **Inactivación visual:** Cambia `activo = false` en cascada. |
 
 ---
 
 ### 2.10 Roles y Permisos Granulares (`/api/roles`)
-*Archivo: `src/routes/roles.routes.js`*
+*Módulo: `src/modules/manager/roles.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/roles` | Bearer JWT | `roles.ver` | Lista los roles de la empresa actual más los roles del sistema (`empresa_id IS NULL`). Respeta la jerarquía mostrando solo roles con `nivel > user.rol_nivel`. |
-| `GET` | `/api/roles/:id` | Bearer JWT | `roles.ver` | Obtiene el detalle de un rol por su ID. |
-| `POST` | `/api/roles` | Bearer JWT | `roles.crear` | Crea un rol. Valida que el `nivel` numérico del nuevo rol sea estrictamente superior al nivel del usuario creador (menor poder). |
-| `PUT` | `/api/roles/:id` | Bearer JWT | `roles.editar` | Actualiza un rol. Bloquea si el rol objetivo o el nuevo nivel pretendido es igual o superior al del usuario logueado. |
-| `DELETE` | `/api/roles/:id` | Bearer JWT | `roles.eliminar` | Elimina un rol si el usuario solicitante supera su nivel jerárquico. |
-| `GET` | `/api/roles/:id/permisos` | Bearer JWT | `roles.ver` | Retorna el array de UUIDs de permisos asignados a un rol específico. |
-| `POST` | `/api/roles/:id/permisos` | Bearer JWT | `roles.editar` | Reemplaza transaccionalmente los permisos concedidos al rol en `rol_permisos`. Valida jerarquía del rol antes de proceder. **Body:** `{ permisosIds: [uuid, ...] }`. |
+| `GET` | `/api/roles` | Bearer JWT | `roles.ver` | Lista roles de la empresa respetando jerarquía de nivel. |
+| `GET` | `/api/roles/:id` | Bearer JWT | `roles.ver` | Detalle del rol y array de `permisos_ids` asignados. |
+| `POST` | `/api/roles` | Bearer JWT | `roles.crear` | Crea rol con validación de nivel de jerarquía y asigna permisos. |
+| `PUT` | `/api/roles/:id` | Bearer JWT | `roles.editar` | Actualiza datos del rol y sincroniza tabla `rol_permisos`. |
+| `DELETE` | `/api/roles/:id` | Bearer JWT | `roles.eliminar` | **Inactivación visual:** Cambia `activo = false` (impide borrar roles del sistema). |
 
 ---
 
 ### 2.11 Permisos del Sistema (`/api/permisos`)
-*Generado vía: `crud.factory.js` sobre `schema.permisos` con `permissionOverride: { read: 'roles.ver' }`*
+*Hub: `src/routes/gestion.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/permisos` | Bearer JWT | `roles.ver` *(Override)* | Lista el catálogo global de permisos del sistema para su visualización y asignación en matrices de roles. |
-| `GET` | `/api/permisos/:id` | Bearer JWT | `roles.ver` *(Override)* | Obtiene la descripción y código de un permiso específico. |
-| `POST` | `/api/permisos` | Bearer JWT | `permisos.crear` | Registra manualmente un nuevo permiso en el catálogo. |
-| `PUT` | `/api/permisos/:id` | Bearer JWT | `permisos.editar` | Actualiza nombre o descripción de un permiso. |
-| `DELETE` | `/api/permisos/:id` | Bearer JWT | `permisos.eliminar` | Elimina un permiso del catálogo. |
+| `GET` | `/api/permisos` | Bearer JWT | `roles.ver` | Catálogo de permisos individuales (`modulo.accion`) para asignación de roles. |
 
 ---
 
 ### 2.12 Clientes (`/api/clientes`)
-*Archivo: `src/routes/clientes.routes.js`*
+*Módulo: `src/modules/clientes/clientes.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/clientes` | Bearer JWT | Autenticado | Lista paginada de clientes. Parámetros query: `page`, `limit`, `q`. |
-| `GET` | `/api/clientes/:id` | Bearer JWT | Autenticado | Obtiene la información de un cliente por su UUID. |
-| `POST` | `/api/clientes` | Bearer JWT | Autenticado | Registra un nuevo cliente con validación de schema de Fastify (`nombre`, `ruc`, `email`, `telefono`, `tipo`). |
-| `PUT` | `/api/clientes/:id` | Bearer JWT | Autenticado | Actualiza la información comercial o fiscal de un cliente. |
-| `DELETE` | `/api/clientes/:id` | Bearer JWT | Autenticado | Baja lógica del cliente. |
+| `GET` | `/api/clientes` | Bearer JWT | `clientes.ver` | Listado de clientes con RLS, cálculo de crédito disponible y filtros. |
+| `GET` | `/api/clientes/:id` | Bearer JWT | `clientes.ver` | Obtiene cliente específico con desglose de saldo utilizado y disponible. |
+| `POST` | `/api/clientes` | Bearer JWT | `clientes.crear` | Registra cliente validando unicidad de documento y convirtiendo montos a céntimos. |
+| `PUT` | `/api/clientes/:id` | Bearer JWT | `clientes.editar` | Actualiza datos de contacto y condiciones comerciales de crédito. |
+| `DELETE` | `/api/clientes/:id` | Bearer JWT | `clientes.eliminar` | **Inactivación visual:** Asigna `estado_credito = 'INACTIVO'` sin borrado físico. |
 
 ---
 
-### 2.12.1 Proveedores (`/api/proveedores`)
-*Archivo: `src/routes/proveedores.routes.js`*
+### 2.13 Productos y Catálogo Comercial (`/api/productos`)
+*Módulo: `src/modules/productos/productos.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/proveedores` | Bearer JWT | `proveedores.ver` | Lista el directorio de proveedores con soporte para filtro de texto `q`, estado `activo`, join a `ubigeo` y aislamiento RLS por empresa. |
-| `GET` | `/api/proveedores/:id` | Bearer JWT | `proveedores.ver` | Obtiene el detalle de un proveedor por su UUID con datos de ubicación territorial. |
-| `POST` | `/api/proveedores` | Bearer JWT | `proveedores.crear` | Registra un nuevo proveedor validando RUC de 11 dígitos, unicidad y asignación automática de empresa (`empresa_id`). |
-| `PUT` | `/api/proveedores/:id` | Bearer JWT | `proveedores.editar` | Actualiza la información fiscal, de contacto y clasificación comercial del proveedor. |
-| `DELETE` | `/api/proveedores/:id` | Bearer JWT | `proveedores.eliminar` | Da de baja lógica al proveedor (`activo: false`). |
+| `GET` | `/api/productos` | Bearer JWT | `productos.ver` | Lista productos con sus presentaciones y stocks por sede en tiempo real. |
+| `GET` | `/api/productos/:id` | Bearer JWT | `productos.ver` | Detalle completo de producto y desglose de presentaciones comerciales. |
+| `POST` | `/api/productos` | Bearer JWT | `productos.crear` | Crea producto y presentaciones en transacción atómica con validación de código de barras. |
+| `PUT` | `/api/productos/:id` | Bearer JWT | `productos.editar` | Actualiza cabecera de producto y sincroniza presentaciones. |
+| `DELETE` | `/api/productos/:id` | Bearer JWT | `productos.eliminar` | **Inactivación visual:** Cambia `activo = false` en `productos` y `presentaciones`. |
 
 ---
 
-### 2.13 Productos (`/api/productos`)
-*Archivo: `src/routes/productos.routes.js`*
+### 2.14 Proveedores (`/api/proveedores`)
+*Módulo: `src/modules/proveedores/proveedores.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/productos` | Bearer JWT | Autenticado | Consulta catálogo de productos con sus presentaciones y precios calculados divididos por `factorPrecio` (decimal visual en Soles), ordenados cronológicamente descendente. Admite filtros por categoría y búsqueda textual. Retorna además el objeto `{ factores: { factorPrecio, factorVolumen } }`. |
-| `GET` | `/api/productos/:id` | Bearer JWT | Autenticado | Consulta la ficha individual de un producto con todas sus presentaciones y tarifas asociadas en formato decimal y `_raw` en enteros. |
-| `POST` | `/api/productos` | Bearer JWT | Autenticado | Registra transaccionalmente un producto y su array de presentaciones. Aplica automáticamente `factorPrecio` para persistir los precios en céntimos (enteros `bigint`) y valida `stock_minimo` como entero. La base de datos autogenera el código correlativo/interno (`codigo`: `varchar(8)`). Admite clasificaciones fiscales SUNAT (`tipo_existencia`: `varchar(5)`, ej. `"1"` Mercadería; `tipo_tributo`: `varchar(5)`, ej. `"10"` Gravado IGV), códigos de barra, palabras clave y multiempresa (`empresa_id`). |
-| `PUT` | `/api/productos/:id` | Bearer JWT | Autenticado | Actualiza el producto y sincroniza sus presentaciones comerciales en una transacción atómica multiplicando tarifas por `factorPrecio` (preservando el `codigo` autogenerado por la BD). |
-| `DELETE` | `/api/productos/:id` | Bearer JWT | Autenticado | Da de baja lógica al producto (`activo: false`). |
+| `GET` | `/api/proveedores` | Bearer JWT | `proveedores.ver` | Lista proveedores con joins a tabla `ubigeo`. |
+| `GET` | `/api/proveedores/:id` | Bearer JWT | `proveedores.ver` | Detalle individual de proveedor. |
+| `POST` | `/api/proveedores` | Bearer JWT | `proveedores.crear` | Registra proveedor validando formato y unicidad de RUC. |
+| `PUT` | `/api/proveedores/:id` | Bearer JWT | `proveedores.editar` | Actualiza datos comerciales y contacto del proveedor. |
+| `DELETE` | `/api/proveedores/:id` | Bearer JWT | `proveedores.eliminar` | **Inactivación visual:** Cambia `activo = false`. |
 
 ---
 
-### 2.13.0 Combos Promocionales (`/api/combos`)
-*Archivo: `src/routes/combos.routes.js`* · *Maneja `productos` (`es_combo = true`), `presentaciones` y `combo_detalles`*
+### 2.15 Control de Stock y Kárdex (`/api/stock`)
+*Módulo: `src/modules/stock/stock.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/combos` | Bearer JWT | Autenticado | Lista combos promocionales activos e inactivos de la empresa con stock virtual dinámico calculado en tiempo real ($\min \lfloor\text{stock}_i / \text{cant}_i\rfloor$) y desglose de componentes. |
-| `GET` | `/api/combos/:id` | Bearer JWT | Autenticado | Retorna cabecera del combo, precio acumulado y array de productos componentes enriquecidos con su precio costo, venta y ajuste. |
-| `POST` | `/api/combos` | Bearer JWT | Autenticado | **Creación Transaccional de Combo:** Inserta producto (`es_combo: true`), presentación principal y componentes en `combo_detalles` con doble modalidad (`tipo_ajuste: 'MARGEN' \| 'DESCUENTO'`). Valida no duplicados y unicidad de código de barras. |
-| `PUT` | `/api/combos/:id` | Bearer JWT | Autenticado | **Edición Transaccional de Combo:** Actualiza cabecera y reemplaza atómicamente los ítems en `combo_detalles` recalculando el precio total del paquete. |
-| `PATCH` | `/api/combos/:id` | Bearer JWT | Autenticado | Conmuta el estado del combo entre `'Activo'` e `'Inactivo'` actualizando sincronizadamente sus presentaciones. Body: `{ Estado: 'Activo' \| 'Inactivo' }`. |
-| `DELETE` | `/api/combos/:id` | Bearer JWT | Autenticado | Borrado físico transaccional del combo, su presentación y sus relaciones en `combo_detalles`. |
+| `GET` | `/api/stock/actual` | Bearer JWT | `stock.ver` | Consulta consolidada de saldos en `stock_actual` formateada con factores visuales. |
+| `GET` | `/api/stock/kardex` | Bearer JWT | `stock.ver` | Historial de movimientos de inventario (entradas, salidas, ajustes, ventas, compras). |
+| `POST` | `/api/stock/reinicio` | Bearer JWT | `stock.crear` | **Reinicio de Stock:** Caso de uso transaccional que asienta en cero el stock actual y registra auditoría en Kárdex. |
+| `POST` | `/api/stock/carga-masiva` | Bearer JWT | `stock.crear` | **Carga Masiva:** Importación por lotes de saldos iniciales con validación de producto y presentación. |
 
 ---
 
-### 2.13.1 Pre-Ventas (`/api/preventas`)
-*Archivo: `src/routes/preventas.routes.js`* · *Maneja `pre_ventas` y `detalle_pre_ventas`*
+### 2.16 Combos Promocionales (`/api/combos`)
+*Módulo: `src/modules/combos/combos.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/preventas` | Bearer JWT | Autenticado | Lista preventas con filtros query (`fecha_inicio`, `fecha_fin`, `estado`, `q`), join a `clientes` y RLS por `branch_id`. |
-| `GET` | `/api/preventas/:id` | Bearer JWT | Autenticado | Obtiene la cabecera de la preventa junto a su array de ítems (`detalle_pre_ventas`). |
-| `POST` | `/api/preventas` | Bearer JWT | Autenticado | **Generación Transaccional de Preventa:** Inserta cabecera en `pre_ventas` (estado `PENDIENTE`, vinculada al turno activo si existe) y líneas en `detalle_pre_ventas`. Retorna `id` y código legible (`PRE-xxxxxxxx`). |
-| `PUT` | `/api/preventas/:id` | Bearer JWT | Autenticado | **Edición de Preventa:** Actualiza cliente, placa y totales en `pre_ventas` y reemplaza atómicamente los ítems en `detalle_pre_ventas`. Bloquea si la preventa ya fue PROCESADA. |
+| `GET` | `/api/combos` | Bearer JWT | `combos.ver` | Listado de combos con stock virtual dinámico calculado a partir de componentes. |
+| `GET` | `/api/combos/:id` | Bearer JWT | `combos.ver` | Detalle del combo con desglose de sub-productos y fórmulas de precio. |
+| `POST` | `/api/combos` | Bearer JWT | `combos.crear` | Registra combo virtual, crea presentación principal y asienta componentes en `combo_detalles`. |
+| `PUT` | `/api/combos/:id` | Bearer JWT | `combos.editar` | Actualiza cabecera del combo y sustituye componentes atómicamente. |
+| `PATCH` | `/api/combos/:id` | Bearer JWT | `combos.editar` | Alterna estado activo/inactivo del combo. |
+| `DELETE` | `/api/combos/:id` | Bearer JWT | `combos.eliminar` | **Inactivación visual:** Cambia `activo = false` en combo y sus presentaciones. |
 
 ---
 
-### 2.14 Ventas y Facturación (`/api/ventas`)
-*Archivo: `src/routes/ventas.routes.js`* · *Maneja `ventas`, `detalle_ventas`, `ventas_pagos` y `stock_actual`*
+### 2.17 Pre-Ventas (`/api/preventas`)
+*Módulo: `src/modules/ventas/preventas.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/ventas` | Bearer JWT | Autenticado | Lista comprobantes de venta emitidos con filtros (`fecha_inicio`, `fecha_fin`, `estado`, `tipo_documento`, `q`), serie-correlativo y RLS por `branch_id`. |
-| `GET` | `/api/ventas/:id` | Bearer JWT | Autenticado | Obtiene cabecera de venta, detalle de ítems (`detalle_ventas`) y métodos de pago aplicados (`ventas_pagos`). |
-| `POST` | `/api/ventas` | Bearer JWT | Autenticado | **Transacción de Venta y Cobro:** Asigna atómicamente serie y correlativo desde `caja_serie_correlativo`, inserta en `ventas`, copia ítems a `detalle_ventas`, registra métodos en `ventas_pagos`, descuenta inventario en `stock_actual` y actualiza la preventa a `PROCESADA`. Si es `factura` o `boleta`, activa la facturación electrónica (`facturado = true`). Si es `vale`, emite comprobante interno sin envío tributario. |
-| `POST` | `/api/ventas/:id/anular` | Bearer JWT | Autenticado | Anula una venta emitida (`estado = 'ANULADO'`) registrando el motivo. |
+| `GET` | `/api/preventas` | Bearer JWT | Autenticado | Lista preventas de la sucursal (por defecto en estado `PENDIENTE`). |
+| `GET` | `/api/preventas/:id` | Bearer JWT | Autenticado | Detalle completo de preventa con ítems y desglose previsto de combos. |
+| `POST` | `/api/preventas` | Bearer JWT | Autenticado | Genera pedido previo sin afectar stock físico y registra `combo_detalle_pre_ventas`. |
+| `PUT` | `/api/preventas/:id` | Bearer JWT | Autenticado | Modifica preventa mientras mantenga estado `PENDIENTE`. |
+| `DELETE` | `/api/preventas/:id` | Bearer JWT | Autenticado | **Inactivación visual:** Actualiza `estado = 'ANULADO'` impidiendo borrado físico. |
 
 ---
 
-### 2.15 Sincronización Servidor-a-Servidor (`/api/sync`)
+### 2.18 Ventas y Facturación (`/api/ventas`)
+*Módulo: `src/modules/ventas/ventas.routes.js`*
+
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/api/ventas` | Bearer JWT | Autenticado | Listado histórico de ventas con filtros de fecha, tipo de comprobante, cliente y búsqueda. |
+| `GET` | `/api/ventas/:id` | Bearer JWT | Autenticado | Consulta detallada de venta con desglose tributario, métodos de pago y combo detalle. |
+| `POST` | `/api/ventas` | Bearer JWT | Autenticado | **Emisión y Cobro Atómico:** Bloqueo `FOR UPDATE` de serie/correlativo, validaciones fiscales SUNAT ($\ge 700$), turno de caja activo, descuento de stock en almacén y Kárdex, pagos y cierre de preventa. |
+| `POST` | `/api/ventas/:id/anular` | Bearer JWT | Autenticado | **Anulación y Reversión:** Marca `estado = 'ANULADO'` y restituye atómicamente el stock en `stock_actual` y `stock` (Kárdex `tipo_mov: 1 = Entrada`). |
+
+---
+
+### 2.19 Sincronización Servidor-a-Servidor (`/api/sync`)
 *Archivo: `src/routes/sync.routes.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `POST` | `/api/sync/push` | API Key (`x-api-key`) | Servidor Nube/Local | Recibe lotes de modificaciones offline generadas en nodos locales y las aplica mediante Last-Write-Wins. **Body:** `{ registros: [{ tabla, registro_id, operacion, payload, updated_at }] }`. |
-| `GET` | `/api/sync/pull` | API Key (`x-api-key`) | Servidor Nube/Local | Permite a los servidores locales consultar y descargar cambios generados en la nube a partir de una fecha/hora dada (`?since=<timestamp>`). |
-| `GET` | `/api/sync/status` | Bearer JWT | Autenticado | Informa el estado de sincronización del nodo y la periodicidad programada (`SYNC_INTERVAL_SECONDS`). |
+| `POST` | `/api/sync/push` | API Key (`x-api-key`) | Servidor Nube/Local | Aplica modificaciones generadas en nodos locales mediante estrategia Last-Write-Wins. |
+| `GET` | `/api/sync/pull` | API Key (`x-api-key`) | Servidor Nube/Local | Descarga cambios generados en la nube a partir de una marca temporal (`?since=<timestamp>`). |
+| `GET` | `/api/sync/status` | Bearer JWT | Autenticado | Informa el estado y frecuencia del motor de sincronización. |
 
 ---
 
-### 2.16 Utilidades y Consulta RUC/DNI (`/api/utils`)
+### 2.20 Utilidades y Consulta RUC/DNI (`/api/utils`)
 *Archivo: `src/routes/utils.routes.js`* · *Servicio: `src/services/api_peru_service.js`*
 
-| Método | Endpoint | Autenticación | Permiso RBAC | Descripción / Parámetros |
+| Método | Endpoint | Autenticación | Permiso RBAC | Descripción |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/utils/consulta-documento/:tipo/:numero` | Bearer JWT | Autenticado | Consulta en tiempo real los datos oficiales de un RUC (SUNAT) o DNI (RENIEC). Cuenta con mecanismo de alta disponibilidad que intenta primero la API oficial configurada (`prorucdni.mifacturaperu.com`) y ante caídas salta automáticamente al scraping de contingencia de `apis.net.pe`. |
+| `GET` | `/api/utils/consulta-documento/:tipo/:numero` | Bearer JWT | Autenticado | Consulta en tiempo real los datos oficiales de un RUC (SUNAT) o DNI (RENIEC) con fallback automático. |
 
 ---
 
-## 3. Ubicación de Controladores, Modelos y Rutas
+## 3. Ubicación de Módulos, Controladores, Servicios y Repositorios
+
+El backend implementa el patrón **Vertical Slice Architecture** por dominios delimitados:
 
 ```
-                     ┌────────────────────────────────────────────────────────┐
-                     │                       server.js                        │
-                     └───────────────────────────┬────────────────────────────┘
-                                                 │ inicializa
-                                                 ▼
-                     ┌────────────────────────────────────────────────────────┐
-                     │                     src/app.js                         │
-                     └──────┬────────────────────┬────────────────────┬───────┘
-                            │                    │                    │
-              registra      │      registra      │      registra      │
-     ┌──────────────────────▼──────┐   ┌─────────▼──────────┐   ┌─────▼────────────────┐
-     │        src/plugins/         │   │    src/routes/     │   │     src/core/        │
-     │ ├── auth.js (JWT & RBAC)    │   │ ├── auth.routes.js │   │ ├── crud.factory.js  │
-     │ ├── cors.js                 │   │ ├── usuarios.r.js  │   │ ├── generic.service  │
-     │ ├── db.js (Postgres pool)   │   │ ├── empresas.r.js  │   │ └── permissions.hook │
-     │ └── sensible.js             │   │ └── gestion.r.js ──┼─┐ └──────────────────────┘
-     └─────────────────────────────┘   └────────────────────┘ │
-                                                              │ sub-enruta
-                                       ┌──────────────────────▼───────────────────────┐
-                                       │ ├── sucursales.routes.js                     │
-                                       │ ├── modulos.routes.js                        │
-                                       │ ├── roles.routes.js                          │
-                                       │ ├── cajas.routes.js (crud.factory)           │
-                                       │ ├── tiposComprobante.routes.js (crud.factory)│
-                                       │ └── almacenes / permisos (crud.factory)      │
-                                       └──────────────────────────────────────────────┘
-                                                              │
-                                                consume       │
-                                                              ▼
-                                       ┌──────────────────────────────────────────────┐
-                                       │      src/services/ & src/db/                 │
-                                       │ ├── auth_service.js                          │
-                                       │ ├── api_peru_service.js                      │
-                                       │ ├── db/schema.js (Drizzle ORM)               │
-                                       │ └── db/index.js (Drizzle Client)             │
-                                       └──────────────────────────────────────────────┘
+Fastify Router (module.routes.js) ──► Controller (HTTP/Status) ──► Service (Business Logic / Tx) ──► Repository (Drizzle ORM)
 ```
 
-### 3.1 Capa de Rutas (`src/routes/`)
-Las rutas están desacopladas en módulos temáticos. Cada archivo exporta una función asíncrona compatible con el sistema de plugins de Fastify:
-- **`app.js`**: Registra los routers raíz (`health`, `auth`, `productos`, `clientes`, `ventas`, `usuarios`, `sync`, `gestion`, `utils`).
-- **`gestion.routes.js`**: Actúa como un *hub* agregador que anida las rutas de configuración y catálogos (`empresas`, `sucursales`, `almacenes`, `modulos`, `cajas`, `tipos-comprobante`, `roles`, `permisos`).
+### 3.1 Capa de Módulos de Dominio (`src/modules/`)
+Cada módulo encapsula sus responsabilidades sin acoplamientos horizontales rígidos:
+1. **`routes.js`**: Declaración pura de rutas, validaciones y hooks de autorización Fastify.
+2. **`controllers/`**: Mapeo de parámetros HTTP, invocación al servicio y respuestas semánticas (`200`, `201`, `400`, `404`, `500`).
+3. **`services/`**: Casos de uso especializados, reglas de cálculo, transacciones atómicas `db.transaction()` y orquestación.
+4. **`repositories/`**: Consultas Drizzle ORM parametrizadas con inyección segura de RLS y joins eficientes.
 
-### 3.2 Capa de Controladores y Lógica de Negocio
-El proyecto aplica un patrón híbrido y optimizado para alto rendimiento en Fastify:
-1. **Controladores Inline / Route Handlers:** La validación de peticiones y las respuestas HTTP se definen directamente en la declaración de las rutas de cada módulo.
-2. **Servicios Especializados (`src/services/`):**
-   - **`auth_service.js`**: Maneja el ciclo completo de autenticación: hashing con bcrypt, emisión de tokens, resolución de empresa activa, inyección de permisos en memoria y cálculo recursivo de menús dinámicos (`buildTree`).
-   - **`api_peru_service.js`**: Encapsula la comunicación con servicios externos para consultas de padrones SUNAT/RENIEC, con lógica de fallback automático.
-3. **Controladores Genéricos Automatizados (`src/core/`):**
-   - **`crud.factory.js` (`buildCrudRoutes`)**: Factoría de controladores que genera endpoints estandarizados con soporte automático de inyección de RLS, hooks de autenticación y validación de permisos.
-   - **`generic.service.js` (`GenericService`)**: Abstracción de operaciones CRUD (`getAll`, `getById`, `create`, `update`, `remove`) sobre cualquier tabla definida en Drizzle.
-4. **Carpeta `src/controllers/`**:
-   - Se mantiene creada en la estructura como punto de extensión preparado para futuros controladores desacoplados cuando la complejidad de ciertas rutas lo requiera.
-
-### 3.3 Capa de Modelos y Base de Datos (`src/db/`)
-- **`src/db/index.js`**: Conexión a la base de datos a través de `drizzle-orm/postgres-js` configurada con un pool de conexiones y el esquema combinado.
-- **`src/db/schema.js`**: Esqueleto central de la base de datos en PostgreSQL con más de **80 tablas** fuertemente tipadas y estructuradas en los siguientes dominios:
-  - **Multi-Tenant y Sedes:** `empresas`, `sucursales`, `almacenes`, `ubigeo`.
-  - **Identidad, Jerarquía y RBAC:** `usuarios`, `usuario_accesos`, `roles`, `modulos`, `permisos`, `rol_permisos`, `usuario_permisos`, `empresa_modulos`, `tokens_autorizacion`.
-  - **Catálogos SUNAT y Facturación:** `tipo_comprobante`, `tipo_documento`, `tipo_afectacion_igv`, `tipo_tributos`, `tipo_moneda`, `tipo_pago`, `tipo_metodo_pago`, `tipo_cambio`, `tipo_codigos_detraccion`, `tipo_motivo_traslado`, `tipo_existencia`, `tipo_unidades_medida`, `tipo_factores`.
-  - **Gestión de Caja y Arqueos:** `caja_serie_correlativo`, `caja_turnos`, `caja_movimientos`, `caja_totales`, `caja_arqueos`, `caja_chica`, `caja_chica_sesiones`, `caja_chica_movimientos`, `caja_chica_arqueos`, `caja_chica_totales`.
-  - **Inventario y Productos:** `productos`, `presentaciones`, `stock`, `stock_actual`, `lotes`, `categorias`, `subcategoria`, `movimiento_almacen`, `movimiento_almacen_detalle`, `recetas`, `recetas_detalles`.
-  - **Ventas y Comprobantes Electrónicos:** `ventas`, `detalle_ventas`, `ventas_pagos`, `ventas_sire`, `pre_ventas`, `cotizaciones`, `notas_credito`, `guias_remision`, `mensajeticket`.
-  - **Compras y Proveedores:** `compra`, `compra_detalle`, `compra_orden`, `compra_cotizacion`, `compra_requerimiento`, `compras_pagos`, `compras_sire`, `proveedores`, `productos_proveedores`.
-- **`src/db/relations.js`**: Relaciones explícitas de Drizzle (ej. `caja_serie_correlativo` con `tipo_comprobante`).
-- **`src/db/migrations/`**: Migraciones SQL DDL generadas por Drizzle Kit (`0000`, `0001`, `0002`).
-
-### 3.4 Capa de Plugins Fastify (`src/plugins/`)
-- **`auth.js`**: Registra `@fastify/jwt` y decora la instancia con tres hooks esenciales:
-  1. `fastify.authenticate`: Valida la existencia y firma del Bearer JWT.
-  2. `fastify.authenticateApiKey`: Valida el header `x-api-key` para replicación entre servidores.
-  3. `fastify.authorize`: Middleware inteligente de autorización. Decodifica el token, inyecta `empresa_id`, `branch_id` y `rol_nivel`, permite paso libre al `es_super_admin` e infiere en tiempo constante $O(1)$ si el usuario posee el permiso de la ruta.
-- **`db.js`**: Abre el cliente de conexión nativa de `postgres` y provee health check.
-- **`cors.js`**: Gestiona las políticas CORS a través de orígenes configurados por variable de entorno.
-- **`sensible.js`**: Habilita métodos semánticos para respuestas de error estándar de HTTP (`reply.notFound()`, etc.).
+### 3.2 Regla de Negocio Crítica: Inactivación Visual (No Physical Delete)
+> [!IMPORTANT]
+> **En todo el ERP está terminantemente prohibido el borrado físico (`DELETE FROM`) en tablas maestras o transaccionales.**
+> Todas las operaciones de eliminación operan como **Soft Delete / Inactivación Visual**:
+> - En entidades con columna `activo`: `UPDATE ... SET activo = false, updated_at = NOW()`.
+> - En `clientes`: `UPDATE ... SET estado_credito = 'INACTIVO', updated_at = NOW()`.
+> - En `ventas` y `pre_ventas`: `UPDATE ... SET estado = 'ANULADO', updated_at = NOW()`.
 
 ---
 
 ## 4. Variables de Entorno Requeridas
 
-Las siguientes variables son leídas por el backend a través de `dotenv` y `@fastify/env`. Están documentadas en `BACK/.env.example` y activas en `BACK/.env`:
-
 | Variable | Tipo | Requerida | Valor por Defecto / Ejemplo | Propósito y Descripción |
 | :--- | :---: | :---: | :--- | :--- |
-| `PORT` | Numérico | No | `5000` | Puerto TCP en el que el servidor Fastify escucha peticiones. |
-| `NODE_ENV` | String | Sí | `production` / `development` | Entorno de ejecución de Node. En `development` activa formateo visual de logs con `pino-pretty`. |
-| `LOG_LEVEL` | String | No | `info` | Nivel mínimo de detalle para Pino Logger (`debug`, `info`, `warn`, `error`). |
-| `DATABASE_URL` | String | **Sí** | `postgresql://user:pass@host:5432/db` | Cadena de conexión para PostgreSQL 18. Consumida por Drizzle ORM y el cliente `postgres`. |
-| `JWT_SECRET` | String | **Sí** | *Cadena criptográfica extensa* | Clave secreta simétrica utilizada para firmar y verificar tokens de acceso JWT. |
+| `PORT` | Numérico | No | `5000` | Puerto TCP en el que escucha Fastify. |
+| `NODE_ENV` | String | Sí | `production` / `development` | Entorno de ejecución de Node.js. |
+| `LOG_LEVEL` | String | No | `info` | Nivel mínimo de detalle para Pino Logger. |
+| `DATABASE_URL` | String | **Sí** | `postgresql://user:pass@host:5432/db` | Cadena de conexión para PostgreSQL 18 consumida por Drizzle ORM. |
+| `JWT_SECRET` | String | **Sí** | *Cadena criptográfica extensa* | Clave secreta simétrica para firmar y verificar tokens JWT. |
 | `JWT_EXPIRES_IN` | String | No | `15m` (o `8h` en dev) | Tiempo de expiración del token de acceso (`access_token`). |
-| `REFRESH_TOKEN_EXPIRES_IN` | String | No | `7d` | Tiempo de vida útil del token de actualización (`refresh_token`). |
-| `CORS_ORIGINS` | String | **Sí** | `http://localhost:5175,http://127.0.0.1:5175` | Lista separada por comas de los orígenes frontend autorizados para interactuar con la API. |
-| `SYNC_API_KEY` | String | **Sí** | *Clave secreta compartida* | Clave para autenticación en cabecera `x-api-key` requerida por las rutas `/api/sync/push` y `/pull`. |
-| `SYNC_INTERVAL_SECONDS` | Numérico | No | `30` | Intervalo de referencia en segundos para el ciclo de sincronización de datos. |
-| `API_PERU_URL` | String | No | `https://prorucdni.mifacturaperu.com` | URL base del microservicio primario para consulta de padrones de RUC y DNI. |
+| `REFRESH_TOKEN_EXPIRES_IN` | String | No | `7d` | Tiempo de vida útil del refresh token. |
+| `CORS_ORIGINS` | String | **Sí** | `http://localhost:5175,http://127.0.0.1:5175` | Lista separada por comas de los orígenes frontend autorizados. |
+| `SYNC_API_KEY` | String | **Sí** | *Clave secreta compartida* | Clave de cabecera `x-api-key` requerida por las rutas `/api/sync`. |
+| `SYNC_INTERVAL_SECONDS` | Numérico | No | `30` | Intervalo de referencia en segundos para sincronización. |
+| `API_PERU_URL` | String | No | `https://prorucdni.mifacturaperu.com` | URL base del microservicio primario para consulta RUC/DNI. |
 | `API_PERU_TOKEN` | String | No | *Token de autenticación API* | Token Bearer de autorización para consultar la API de RUC/DNI. |
-| `TZ` | String | No | `America/Lima` | Zona horaria del sistema para el formateo de marcas de tiempo en PostgreSQL y Node.js. |
+| `TZ` | String | No | `America/Lima` | Zona horaria del sistema para marcas de tiempo. |
 
 ---
 
 ## 5. Mecanismos Clave de Seguridad y Arquitectura
 
 ### 5.1 Aislamiento Multi-Tenant (Row-Level Security - RLS)
-- Ningún usuario común puede ver ni modificar registros ajenos a su empresa asignada.
-- Al autenticarse, el backend inyecta `request.user.empresa_id` y `request.user.branch_id` a partir del `active_acceso`.
-- Las consultas en `crud.factory.js`, `GenericService` y los endpoints de `empresas`, `sucursales` y `usuarios` filtran automáticamente por estos campos a menos que el usuario posea la bandera `es_super_admin = true`.
+- Filtrado estricto por `empresa_id` y `branch_id` inyectados desde la sesión activa (`request.user`).
+- El usuario `es_super_admin` tiene visibilidad global para tareas de soporte y gestión.
 
-### 5.2 Jerarquía de Niveles de Roles
-- Los roles poseen una columna numérica `nivel` con **regla de inversión**: a menor número, mayor jerarquía (`1` = SuperAdmin / Propietario, `50` = Administrador, `100` = Vendedor).
-- Ningún usuario puede ver, crear, editar o eliminar roles o accesos que tengan un nivel igual o superior al suyo propio.
+### 5.2 Jerarquía Inversa de Roles
+- Nivel numérico donde a menor valor mayor jerarquía (`1` = Propietario / SuperAdmin, `50` = Administrador, `100` = Vendedor).
+- Se prohíbe crear o modificar usuarios con nivel igual o superior al del usuario autenticado.
 
-### 5.3 Validación de Permisos en Tiempo Constante $O(1)$
-- Al iniciar sesión o cambiar de sucursal (`switch-branch`), el conjunto de códigos de permiso autorizados se calcula y se incluye dentro del payload del JWT.
-- En cada petición, el decorador `fastify.authorize` verifica la existencia del permiso (`modulo.accion`) directamente en memoria en $O(1)$, evitando consultas lentas a la base de datos en peticiones transaccionales.
+### 5.3 Autorización en Tiempo Constante $O(1)$
+- El decorador `fastify.authorize` valida el conjunto de permisos precargado en memoria en el JWT, garantizando rendimiento extremo en operaciones de alta frecuencia.
 
-### 5.4 Integridad Transaccional
-- Toda operación que involucre más de una tabla dependiente (por ejemplo, registrar una empresa junto con su sucursal y almacén principal, o registrar un usuario con su acceso y rol inicial) se ejecuta dentro de un bloque `await db.transaction(async (tx) => ...)`. Si cualquier paso falla, se realiza un rollback automático.
+### 5.4 Control de Concurrencia y Transacciones Atómicas
+- Bloqueo pesimista `FOR UPDATE` en asignación de correlativos de comprobantes para evitar saltos o duplicidades ante ráfagas de ventas simultáneas.
+- Ejecución atómica de compras, ventas y aperturas/cierres en bloques `db.transaction()`.
 
 ---
 
 ## 6. Arquitectura Enterprise y Guía de Escalabilidad
 
-Para consultar el plan maestro de crecimiento hacia millones de transacciones, reducción de cuellos de botella y desacoplamiento de capas (Fases 1 a 4), consultar:
+Para consultar las especificaciones técnicas completas del refactoring y evolución modular hacia millones de transacciones:
 👉 **[ARQUITECTURA_ESCALABILIDAD.md](ARQUITECTURA_ESCALABILIDAD.md)**
-
----
-
-> 📌 *Este índice fue generado automáticamente a partir de un análisis estático exhaustivo del código fuente del backend. Para detalles adicionales sobre las políticas de seguridad en frontend y backend, consulte también [DOCUMENTACION_SEGURIDAD.md](file:///home/soporte/Documentos/MIFACTURAPERU/pERP-2027/DOCUMENTACION_SEGURIDAD.md).*

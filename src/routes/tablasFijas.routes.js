@@ -1,7 +1,7 @@
 'use strict'
 
-const buildCrudRoutes = require('../../core/crud.factory')
-const schema = require('../../db/schema')
+const buildCrudRoutes = require('../core/crud.factory')
+const schema = require('../db/schema')
 
 /**
  * Rutas Centralizadas para Tablas Fijas / Catálogos SUNAT y Maestros
