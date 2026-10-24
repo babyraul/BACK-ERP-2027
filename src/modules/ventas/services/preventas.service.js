@@ -4,6 +4,7 @@ const { db } = require('../../../db')
 const schema = require('../../../db/schema')
 const { eq, and, sql, inArray } = require('drizzle-orm')
 const preventasRepository = require('../repositories/preventas.repository')
+const { calcularTotalesVenta } = require('../../../utils/Operaciones')
 const {
   getFactores,
   toVolumenInt,
@@ -119,63 +120,21 @@ const preventasService = {
         })
       }
 
-      let gravadasTotalCalc = 0
-      let exoneradasTotalCalc = 0
-      let inafectasTotalCalc = 0
-      let gratuitasTotalCalc = 0
-      let igvTotalCalc = 0
+      // Calcular bases fiscales mediante la utilidad centralizada Operaciones.js
+      const itemsConAfectacion = items.map((item) => ({
+        ...item,
+        tipo_afectacion_igv: item.tipo_afectacion_igv || prodsMap[item.producto_id]?.tipo_tributo || '10'
+      }))
 
-      const itemsProcesados = items.map((item) => {
-        const cantVisual = Number(item.cantidad || 1)
-        const precioVisual = Number(item.precio_unitario || item.precio || 0)
-        const descVisual = Number(item.descuento || 0)
-        const isGratuito = Boolean(item.gratuito || item.es_gratuito)
+      const totalesCalc = calcularTotalesVenta(itemsConAfectacion)
+      const itemsProcesados = totalesCalc.itemsProcesados
 
-        const afectacionRaw = String(item.tipo_afectacion_igv || prodsMap[item.producto_id]?.tipo_tributo || '10').trim()
-        const afectacionNum = parseInt(afectacionRaw, 10) || 10
+      const gravadasTotalCalc = totalesCalc.gravado
+      const igvTotalCalc = totalesCalc.igv
+      const exoneradasTotalCalc = totalesCalc.exonerado
+      const inafectasTotalCalc = totalesCalc.inafecto
 
-        let itemSubtotalVisual = 0
-        let itemIgvVisual = 0
-        let itemTotalVisual = 0
-
-        if (isGratuito || (afectacionNum >= 11 && afectacionNum <= 16) || afectacionNum === 21 || (afectacionNum >= 31 && afectacionNum <= 37)) {
-          itemTotalVisual = 0
-          itemSubtotalVisual = 0
-          itemIgvVisual = 0
-          gratuitasTotalCalc += Number((cantVisual * precioVisual).toFixed(2))
-        } else if (afectacionNum === 20) {
-          itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
-          itemSubtotalVisual = itemTotalVisual
-          itemIgvVisual = 0
-          exoneradasTotalCalc += itemSubtotalVisual
-        } else if (afectacionNum === 30 || afectacionNum === 40) {
-          itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
-          itemSubtotalVisual = itemTotalVisual
-          itemIgvVisual = 0
-          inafectasTotalCalc += itemSubtotalVisual
-        } else {
-          itemTotalVisual = Math.max(0, Number((cantVisual * precioVisual - descVisual).toFixed(2)))
-          itemSubtotalVisual = Number((itemTotalVisual / 1.18).toFixed(2))
-          itemIgvVisual = Number((itemTotalVisual - itemSubtotalVisual).toFixed(2))
-          gravadasTotalCalc += itemSubtotalVisual
-          igvTotalCalc += itemIgvVisual
-        }
-
-        return {
-          ...item,
-          cantVisual,
-          precioVisual,
-          descVisual,
-          afectacionNum,
-          itemTotalVisual,
-          itemSubtotalVisual,
-          itemIgvVisual
-        }
-      })
-
-      const totalVisual = Number(total || 0) > 0
-        ? Number(total)
-        : Number((gravadasTotalCalc + igvTotalCalc + exoneradasTotalCalc + inafectasTotalCalc).toFixed(2))
+      const totalVisual = Number(total || 0) > 0 ? Number(total) : totalesCalc.total
 
       const gravadasInt = Math.round(gravadasTotalCalc * factorPrecio)
       const exoneradasInt = Math.round(exoneradasTotalCalc * factorPrecio)
