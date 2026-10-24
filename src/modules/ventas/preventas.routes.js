@@ -13,29 +13,19 @@ async function preventasRoutes(fastify) {
   fastify.addHook('preHandler', fastify.authorize)
 
   // 1. Listar preventas con filtros y paginación
-  fastify.get('/', {
-    config: { permission: ['preventas.ver', 'ventas.ver'] }
-  }, preventasController.listar)
+  fastify.get('/', preventasController.listar)
 
   // 2. Obtener cabecera y detalle de la preventa
-  fastify.get('/:id', {
-    config: { permission: ['preventas.ver', 'ventas.ver'] }
-  }, preventasController.obtenerPorId)
+  fastify.get('/:id', preventasController.obtenerPorId)
 
   // 3. Crear nueva preventa transaccional
-  fastify.post('/', {
-    config: { permission: ['preventas.crear', 'ventas.crear'] }
-  }, preventasController.crear)
+  fastify.post('/', preventasController.crear)
 
   // 4. Actualizar preventa existente (Edición)
-  fastify.put('/:id', {
-    config: { permission: ['preventas.editar', 'ventas.crear'] }
-  }, preventasController.actualizar)
+  fastify.put('/:id', preventasController.actualizar)
 
   // 5. Anulación lógica de preventa (Soft Delete / Inactivación)
-  fastify.delete('/:id', {
-    config: { permission: ['preventas.eliminar', 'ventas.anular'] }
-  }, preventasController.anular)
+  fastify.delete('/:id', preventasController.anular)
 }
 
 module.exports = preventasRoutes

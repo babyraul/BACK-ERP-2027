@@ -2,7 +2,7 @@
 
 const { db } = require('../../../db')
 const schema = require('../../../db/schema')
-const { eq } = require('drizzle-orm')
+const { eq, and } = require('drizzle-orm')
 
 /**
  * Repositorio de Empresas y Asignación de Módulos
@@ -138,6 +138,53 @@ const empresasRepository = {
         activo: true
       }))
       await tx.insert(schema.empresa_modulos).values(insertData)
+    }
+  },
+
+  // ── CONFIGURACIONES DE EMPRESA ──────────────────────────────────────────
+  // Obtener IDs de configuraciones activadas para una empresa
+  async getConfiguracionesByEmpresaId(empresaId) {
+    const records = await db
+      .select({ configuracion_id: schema.empresa_configuraciones.configuracion_id })
+      .from(schema.empresa_configuraciones)
+      .where(eq(schema.empresa_configuraciones.empresa_id, empresaId))
+
+    return records.map((r) => r.configuracion_id)
+  },
+
+  // Obtener códigos de configuraciones activas (para inyectar en sesión/token)
+  async getConfiguracionesCodigosByEmpresaId(empresaId) {
+    const records = await db
+      .select({ codigo: schema.configuraciones.codigo })
+      .from(schema.empresa_configuraciones)
+      .innerJoin(
+        schema.configuraciones,
+        eq(schema.empresa_configuraciones.configuracion_id, schema.configuraciones.id)
+      )
+      .where(
+        and(
+          eq(schema.empresa_configuraciones.empresa_id, empresaId),
+          eq(schema.configuraciones.activo, true)
+        )
+      )
+
+    return records.map((r) => r.codigo)
+  },
+
+  // Asignar configuraciones a una empresa de forma atómica
+  async syncConfiguracionesEmpresaTx(tx, { empresaId, configuracionesIds = [] }) {
+    // 1. Eliminar configuraciones actuales de la empresa
+    await tx
+      .delete(schema.empresa_configuraciones)
+      .where(eq(schema.empresa_configuraciones.empresa_id, empresaId))
+
+    // 2. Insertar las nuevas configuraciones activas
+    if (configuracionesIds && configuracionesIds.length > 0) {
+      const insertData = configuracionesIds.map((configId) => ({
+        empresa_id: empresaId,
+        configuracion_id: configId
+      }))
+      await tx.insert(schema.empresa_configuraciones).values(insertData)
     }
   }
 }

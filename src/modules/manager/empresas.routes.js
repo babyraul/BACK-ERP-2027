@@ -39,6 +39,20 @@ async function empresasRoutes(fastify) {
     { config: { permission: 'empresas.modulos' } },
     empresasController.asignarModulos
   )
+
+  // GET /empresas/:id/configuraciones (Requiere empresas.editar o empresas.modulos)
+  fastify.get(
+    '/:id/configuraciones',
+    { config: { permission: ['empresas.editar', 'empresas.modulos'] } },
+    empresasController.obtenerConfiguraciones
+  )
+
+  // POST /empresas/:id/configuraciones (Requiere empresas.editar o empresas.modulos)
+  fastify.post(
+    '/:id/configuraciones',
+    { config: { permission: ['empresas.editar', 'empresas.modulos'] } },
+    empresasController.asignarConfiguraciones
+  )
 }
 
 module.exports = empresasRoutes

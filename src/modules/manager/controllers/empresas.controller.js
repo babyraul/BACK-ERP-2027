@@ -101,6 +101,34 @@ const empresasController = {
         error: error.message
       })
     }
+  },
+
+  // GET /empresas/:id/configuraciones
+  async obtenerConfiguraciones(request, reply) {
+    try {
+      const data = await empresasService.obtenerConfiguraciones(request.params.id)
+      return reply.code(200).send({ data })
+    } catch (error) {
+      request.log.error(error)
+      const statusCode = error.statusCode || 500
+      return reply.code(statusCode).send({ message: error.message })
+    }
+  },
+
+  // POST /empresas/:id/configuraciones
+  async asignarConfiguraciones(request, reply) {
+    try {
+      const { configuracionesIds } = request.body || {}
+      await empresasService.asignarConfiguraciones(request.params.id, configuracionesIds)
+      return reply.code(200).send({ message: 'Configuraciones asignadas correctamente' })
+    } catch (error) {
+      request.log.error(error)
+      const statusCode = error.statusCode || 500
+      return reply.code(statusCode).send({
+        message: 'Error al asignar configuraciones a la empresa',
+        error: error.message
+      })
+    }
   }
 }
 

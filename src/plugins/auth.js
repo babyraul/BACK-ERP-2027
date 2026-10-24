@@ -70,12 +70,12 @@ async function authPlugin(fastify) {
 
     let requiredPermission = routeConfig.permission
 
-    // 4. Si no hay permiso explícito, inferir del path y method
+    // 4. Si no hay permiso explícito, inferir del path y method según convención estándar (DOCUMENTACION_SEGURIDAD.md)
     if (!requiredPermission) {
       const match = request.routeOptions.url.match(/^\/api\/([^\/]+)/)
       if (!match) return // No es una ruta estándar de API, dejar pasar o manejar diferente
       
-      const resource = match[1] // ej. "empresas"
+      const resource = match[1] // ej. "productos", "clientes"
       
       const methodMap = {
         GET: 'ver',

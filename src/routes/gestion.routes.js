@@ -35,10 +35,25 @@ async function gestionRoutes(fastify) {
   const rolesRoutes = require('../modules/manager/roles.routes')
   fastify.register(rolesRoutes, { prefix: '/roles' })
 
-  // Permisos (solo lectura para asignar en roles)
+  // Permisos (lectura para roles, creación y mantenimiento para super admin / roles.editar)
   fastify.register(buildCrudRoutes(schema.permisos, {
-    permissionOverride: { read: 'roles.ver' }
+    permissionOverride: {
+      read: 'roles.ver',
+      create: 'roles.editar',
+      update: 'roles.editar',
+      delete: 'roles.eliminar'
+    }
   }), { prefix: '/permisos' })
+
+  // Catálogo Maestro de Configuraciones / Flags de Empresa
+  fastify.register(buildCrudRoutes(schema.configuraciones, {
+    permissionOverride: {
+      read: 'empresas.ver',
+      create: 'empresas.editar',
+      update: 'empresas.editar',
+      delete: 'empresas.eliminar'
+    }
+  }), { prefix: '/configuraciones' })
 }
 
 module.exports = gestionRoutes

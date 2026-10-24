@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt')
 const { db } = require('../db')
 const { usuarios, usuario_accesos, empresas, sucursales, roles } = require('../db/schema')
 const { eq, and } = require('drizzle-orm')
+const empresasRepository = require('../modules/manager/repositories/empresas.repository')
 
 /**
  * Servicio de autenticación real conectado a la BD.
@@ -55,6 +56,9 @@ async function login(fastify, usuario, password) {
   }
 
   const permisos = await getUserPermissions(user.es_super_admin, active_acceso?.rol_id)
+  const configuraciones = active_acceso?.empresa_id
+    ? await empresasRepository.getConfiguracionesCodigosByEmpresaId(active_acceso.empresa_id)
+    : []
 
   const payload = { 
     id: user.id, 
@@ -64,7 +68,8 @@ async function login(fastify, usuario, password) {
     branch_id: active_acceso?.branch_id,
     rol_id: active_acceso?.rol_id,
     rol_nivel: active_acceso?.rol_nivel,
-    permisos // Inyectado para validación en memoria O(1)
+    permisos, // Inyectado para validación en memoria O(1)
+    configuraciones
   }
 
 
@@ -87,7 +92,8 @@ async function login(fastify, usuario, password) {
       es_super_admin: user.es_super_admin,
       active_acceso,
       accesos: accesosList,
-      permisos
+      permisos,
+      configuraciones
     },
   }
 }
@@ -280,6 +286,9 @@ async function switchBranch(fastify, userId, branchId) {
 
   // 3. Extraer permisos exactos para esa sucursal
   const permisos = await getUserPermissions(user.es_super_admin, active_acceso?.rol_id)
+  const configuraciones = active_acceso?.empresa_id
+    ? await empresasRepository.getConfiguracionesCodigosByEmpresaId(active_acceso.empresa_id)
+    : []
 
   const payload = { 
     id: user.id, 
@@ -289,7 +298,8 @@ async function switchBranch(fastify, userId, branchId) {
     branch_id: active_acceso?.branch_id,
     rol_id: active_acceso?.rol_id,
     rol_nivel: active_acceso?.rol_nivel,
-    permisos
+    permisos,
+    configuraciones
   }
 
   const access_token = fastify.jwt.sign(payload)
@@ -303,7 +313,8 @@ async function switchBranch(fastify, userId, branchId) {
       es_super_admin: user.es_super_admin,
       active_acceso,
       accesos: accesosList,
-      permisos
+      permisos,
+      configuraciones
     },
   }
 }

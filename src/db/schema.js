@@ -49,6 +49,8 @@ __export(schema_exports, {
   compras_sire: () => compras_sire,
   conductores: () => conductores,
   conf_envio_whatsapp: () => conf_envio_whatsapp,
+  configuraciones: () => configuraciones,
+  empresa_configuraciones: () => empresa_configuraciones,
   cotizaciones: () => cotizaciones,
   detalle_cotizaciones: () => detalle_cotizaciones,
   detalle_guias_remision: () => detalle_guias_remision,
@@ -546,6 +548,38 @@ const empresa_modulos = (0, import_pg_core.pgTable)("empresa_modulos", {
   created_at: (0, import_pg_core.timestamp)("created_at", { mode: "string" }).defaultNow().notNull(),
   updated_at: (0, import_pg_core.timestamp)("updated_at", { mode: "string" }).defaultNow().notNull()
 });
+const configuraciones = (0, import_pg_core.pgTable)(
+  "configuraciones",
+  {
+    id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
+    codigo: (0, import_pg_core.varchar)("codigo", { length: 80 }).notNull(),
+    nombre: (0, import_pg_core.varchar)("nombre", { length: 120 }).notNull(),
+    modulo: (0, import_pg_core.varchar)("modulo", { length: 50 }).notNull(),
+    descripcion: (0, import_pg_core.text)("descripcion"),
+    activo: (0, import_pg_core.boolean)("activo").default(true),
+    created_at: (0, import_pg_core.timestamp)("created_at", { withTimezone: true, mode: "string" }).defaultNow()
+  },
+  (table) => ({
+    configuraciones_codigo_key: (0, import_pg_core.unique)("configuraciones_codigo_key").on(table.codigo),
+    idx_configuraciones_modulo: (0, import_pg_core.index)("idx_configuraciones_modulo").using("btree", table.modulo),
+    idx_configuraciones_activo: (0, import_pg_core.index)("idx_configuraciones_activo").using("btree", table.activo)
+  })
+);
+const empresa_configuraciones = (0, import_pg_core.pgTable)(
+  "empresa_configuraciones",
+  {
+    id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
+    empresa_id: (0, import_pg_core.uuid)("empresa_id").notNull(),
+    configuracion_id: (0, import_pg_core.uuid)("configuracion_id").notNull(),
+    created_at: (0, import_pg_core.timestamp)("created_at", { withTimezone: true, mode: "string" }).defaultNow(),
+    updated_at: (0, import_pg_core.timestamp)("updated_at", { withTimezone: true, mode: "string" }).defaultNow()
+  },
+  (table) => ({
+    uq_empresa_configuracion: (0, import_pg_core.unique)("uq_empresa_configuracion").on(table.empresa_id, table.configuracion_id),
+    idx_empresa_configuraciones_empresa: (0, import_pg_core.index)("idx_empresa_configuraciones_empresa").using("btree", table.empresa_id),
+    idx_empresa_configuraciones_configuracion: (0, import_pg_core.index)("idx_empresa_configuraciones_configuracion").using("btree", table.configuracion_id)
+  })
+);
 const roles = (0, import_pg_core.pgTable)("roles", {
   id: (0, import_pg_core.uuid)("id").defaultRandom().primaryKey().notNull(),
   branch_id: (0, import_pg_core.uuid)("branch_id"),

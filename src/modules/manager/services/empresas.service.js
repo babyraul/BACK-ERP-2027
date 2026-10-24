@@ -68,6 +68,18 @@ const empresasService = {
     return db.transaction(async (tx) => {
       await empresasRepository.syncModulosEmpresaTx(tx, { empresaId, modulosIds })
     })
+  },
+
+  // Obtener array de IDs de configuraciones activas de una empresa
+  async obtenerConfiguraciones(empresaId) {
+    return empresasRepository.getConfiguracionesByEmpresaId(empresaId)
+  },
+
+  // Asignar array de IDs de configuraciones a una empresa
+  async asignarConfiguraciones(empresaId, configuracionesIds = []) {
+    return db.transaction(async (tx) => {
+      await empresasRepository.syncConfiguracionesEmpresaTx(tx, { empresaId, configuracionesIds })
+    })
   }
 }
 
