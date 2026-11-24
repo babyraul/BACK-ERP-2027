@@ -45,6 +45,59 @@ const productosController = {
     }
   },
 
+  // GET /api/productos/precios
+  async listarPrecios(request, reply) {
+    try {
+      const { q, categoria_id, activo, limit, offset } = request.query
+      const empresaId = request.user?.empresa_id || request.user?.branch_id
+      const esSuperAdmin = Boolean(request.user?.es_super_admin)
+
+      const safeLimit = limit !== undefined ? Math.min(Math.max(1, Number(limit) || 500), 2000) : 500
+      const safeOffset = offset !== undefined ? Math.max(0, Number(offset) || 0) : 0
+
+      const data = await productosService.listarPreciosPresentaciones({
+        q,
+        categoriaId: categoria_id,
+        activo,
+        empresaId,
+        esSuperAdmin,
+        limit: safeLimit,
+        offset: safeOffset
+      })
+
+      return reply.code(200).send({ data, total: data.length })
+    } catch (error) {
+      request.log.error(error)
+      const statusCode = error.statusCode || 500
+      return reply.code(statusCode).send({
+        success: false,
+        message: 'Error al listar precios: ' + error.message
+      })
+    }
+  },
+
+  // PUT /api/productos/precios/masivo
+  async actualizarPreciosMasivo(request, reply) {
+    try {
+      const { items } = request.body || {}
+      const empresaId = request.user?.empresa_id || request.user?.branch_id
+      const esSuperAdmin = Boolean(request.user?.es_super_admin)
+
+      const result = await productosService.actualizarPreciosMasivo(items, { empresaId, esSuperAdmin })
+      return reply.code(200).send({
+        message: `${result.actualizados} presentaciones actualizadas correctamente`,
+        data: result
+      })
+    } catch (error) {
+      request.log.error(error)
+      const statusCode = error.statusCode || 500
+      return reply.code(statusCode).send({
+        success: false,
+        message: error.message
+      })
+    }
+  },
+
   // GET /api/productos/:id
   async obtenerPorId(request, reply) {
     try {
@@ -53,6 +106,59 @@ const productosController = {
 
       const data = await productosService.obtenerPorId(id, { branchId })
       return reply.code(200).send({ data })
+    } catch (error) {
+      request.log.error(error)
+      const statusCode = error.statusCode || 500
+      return reply.code(statusCode).send({
+        success: false,
+        message: error.message
+      })
+    }
+  },
+
+  // GET /api/productos/precios
+  async listarPrecios(request, reply) {
+    try {
+      const { q, categoria_id, activo, limit, offset } = request.query
+      const empresaId = request.user?.empresa_id || request.user?.branch_id
+      const esSuperAdmin = Boolean(request.user?.es_super_admin)
+
+      const safeLimit = limit !== undefined ? Math.min(Math.max(1, Number(limit) || 500), 2000) : 500
+      const safeOffset = offset !== undefined ? Math.max(0, Number(offset) || 0) : 0
+
+      const data = await productosService.listarPreciosPresentaciones({
+        q,
+        categoriaId: categoria_id,
+        activo,
+        empresaId,
+        esSuperAdmin,
+        limit: safeLimit,
+        offset: safeOffset
+      })
+
+      return reply.code(200).send({ data, total: data.length })
+    } catch (error) {
+      request.log.error(error)
+      const statusCode = error.statusCode || 500
+      return reply.code(statusCode).send({
+        success: false,
+        message: 'Error al listar precios: ' + error.message
+      })
+    }
+  },
+
+  // PUT /api/productos/precios/masivo
+  async actualizarPreciosMasivo(request, reply) {
+    try {
+      const { items } = request.body || {}
+      const empresaId = request.user?.empresa_id || request.user?.branch_id
+      const esSuperAdmin = Boolean(request.user?.es_super_admin)
+
+      const result = await productosService.actualizarPreciosMasivo(items, { empresaId, esSuperAdmin })
+      return reply.code(200).send({
+        message: `${result.actualizados} presentaciones actualizadas correctamente`,
+        data: result
+      })
     } catch (error) {
       request.log.error(error)
       const statusCode = error.statusCode || 500

@@ -18,12 +18,26 @@ const cajasService = {
   },
 
   async listarCajasConfiguradas({ branchId, userId, esSuperAdmin }) {
-    const series = await cajasRepository.getCajasConfiguradas({ branchId, userId, esSuperAdmin })
+    const [series, turnosAbiertos] = await Promise.all([
+      cajasRepository.getCajasConfiguradas({ branchId, userId, esSuperAdmin }),
+      cajasRepository.getTurnosAbiertosSucursal({ branchId, esSuperAdmin })
+    ])
+
+    const turnosPorCaja = {}
+    turnosAbiertos.forEach((t) => {
+      const key = `${t.branch_id || ''}::${t.identificador_caja}`
+      turnosPorCaja[key] = t
+    })
 
     const cajasMap = {}
     series.forEach((s) => {
       const iden = s.identificador_caja || s.nombre || 'CAJA-01'
       if (!cajasMap[iden]) {
+        const turnoAbierto =
+          turnosPorCaja[`${s.branch_id || ''}::${iden}`] ||
+          turnosAbiertos.find((t) => t.identificador_caja === iden && (!s.branch_id || t.branch_id === s.branch_id)) ||
+          null
+
         cajasMap[iden] = {
           identificador_caja: iden,
           nombre: s.nombre || iden,
@@ -31,6 +45,15 @@ const cajasService = {
           tipo_caja: s.tipo_caja,
           usuario_id: s.usuario_id,
           activo: s.activo,
+          disponible: !turnoAbierto,
+          ocupada_por: turnoAbierto
+            ? {
+                turno_id: turnoAbierto.id,
+                usuario_id: turnoAbierto.usuario_id,
+                usuario_nombre: turnoAbierto.usuario_nombre || turnoAbierto.usuario || 'Usuario',
+                fecha_apertura: turnoAbierto.fecha_apertura
+              }
+            : null,
           series: []
         }
       }

@@ -518,6 +518,129 @@ const productosService = {
       throw error
     }
     return producto
+  },
+
+  // 7. Listar precios por presentación para edición masiva
+  async listarPreciosPresentaciones({ q, categoriaId, activo = true, empresaId, esSuperAdmin, limit, offset }) {
+    const rows = await productosRepository.getPresentacionesConProducto({
+      q,
+      categoriaId,
+      activo,
+      empresaId,
+      esSuperAdmin,
+      limit,
+      offset
+    })
+
+    const { factorPrecio } = await getFactores()
+
+    return rows.map((row) => ({
+      presentacion_id: row.presentacion_id,
+      producto_id: row.producto_id,
+      producto_codigo: row.producto_codigo || '',
+      producto_nombre: row.producto_nombre,
+      es_combo: Boolean(row.es_combo),
+      categoria_id: row.categoria_id || null,
+      categoria_nombre: row.categoria_nombre || '',
+      presentacion_nombre: row.presentacion_nombre,
+      cod_barra: row.cod_barra || '',
+      unidad_medida_id: row.unidad_medida_id || 'NIU',
+      multiplica_por: Number(row.multiplica_por || 1),
+      precio_costo: toPrecioVisual(row.precio_costo, factorPrecio),
+      precio_venta: toPrecioVisual(row.precio_venta, factorPrecio),
+      precio_mayor: toPrecioVisual(row.precio_mayor, factorPrecio),
+      precio_especial: toPrecioVisual(row.precio_especial, factorPrecio),
+      precio_otros: toPrecioVisual(row.precio_otros, factorPrecio),
+      descuento_predefinido: toPrecioVisual(row.descuento_predefinido, factorPrecio),
+      updated_at: row.updated_at
+    }))
+  },
+
+  // 8. Actualización masiva atómica de precios por presentación
+  async actualizarPreciosMasivo(items = [], { empresaId, esSuperAdmin = false } = {}) {
+    if (!Array.isArray(items) || items.length === 0) {
+      const error = new Error('Debe enviar al menos una presentación para actualizar precios')
+      error.statusCode = 400
+      throw error
+    }
+
+    const CAMPOS_PRECIO = [
+      'precio_costo',
+      'precio_venta',
+      'precio_mayor',
+      'precio_especial',
+      'precio_otros',
+      'descuento_predefinido'
+    ]
+
+    for (const item of items) {
+      if (!item || !item.presentacion_id) {
+        const error = new Error('Cada elemento debe incluir presentacion_id')
+        error.statusCode = 400
+        throw error
+      }
+      for (const campo of CAMPOS_PRECIO) {
+        if (item[campo] !== undefined && item[campo] !== null) {
+          const num = Number(item[campo])
+          if (!Number.isFinite(num) || num < 0) {
+            const error = new Error(`Valor inválido en ${campo} para la presentación ${item.presentacion_id}`)
+            error.statusCode = 400
+            throw error
+          }
+        }
+      }
+    }
+
+    const { factorPrecio } = await getFactores()
+
+    return db.transaction(async (tx) => {
+      const idsUnicos = Array.from(new Set(items.map((i) => i.presentacion_id)))
+      const permitidas = await productosRepository.getPresentacionesParaActualizarTx(tx, idsUnicos, {
+        empresaId,
+        esSuperAdmin
+      })
+
+      if (permitidas.length !== idsUnicos.length) {
+        const error = new Error('Una o más presentaciones no existen o no pertenecen a su empresa')
+        error.statusCode = 404
+        throw error
+      }
+
+      const actualizados = []
+      for (const item of items) {
+        const camposUpdate = {}
+        for (const campo of CAMPOS_PRECIO) {
+          if (item[campo] !== undefined && item[campo] !== null) {
+            camposUpdate[campo] = toPrecioInt(Number(item[campo]), factorPrecio)
+          }
+        }
+
+        if (Object.keys(camposUpdate).length === 0) continue
+
+        const updated = await productosRepository.updatePresentacionPreciosTx(
+          tx,
+          item.presentacion_id,
+          camposUpdate
+        )
+
+        if (updated) {
+          actualizados.push({
+            presentacion_id: updated.id,
+            precio_costo: toPrecioVisual(updated.precio_costo, factorPrecio),
+            precio_venta: toPrecioVisual(updated.precio_venta, factorPrecio),
+            precio_mayor: toPrecioVisual(updated.precio_mayor, factorPrecio),
+            precio_especial: toPrecioVisual(updated.precio_especial, factorPrecio),
+            precio_otros: toPrecioVisual(updated.precio_otros, factorPrecio),
+            descuento_predefinido: toPrecioVisual(updated.descuento_predefinido, factorPrecio)
+          })
+        }
+      }
+
+      return {
+        actualizados: actualizados.length,
+        items: actualizados
+      }
+    })
   }
 }
 

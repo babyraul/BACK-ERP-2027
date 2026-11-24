@@ -282,6 +282,102 @@ const productosRepository = {
       .where(eq(schema.productos.id, id))
       .returning()
     return inactivado || null
+  },
+
+  // Listar presentaciones con datos de producto para gestión masiva de precios
+  async getPresentacionesConProducto({ q, categoriaId, activo = true, empresaId, esSuperAdmin = false, limit = 500, offset = 0 }) {
+    const conditions = []
+
+    if (!esSuperAdmin && empresaId) {
+      conditions.push(or(eq(schema.productos.empresa_id, empresaId), sql`${schema.productos.empresa_id} IS NULL`))
+    }
+
+    if (activo !== undefined) {
+      const isActivo = activo === 'true' || activo === true
+      conditions.push(eq(schema.productos.activo, isActivo))
+      conditions.push(eq(schema.presentaciones.activo, isActivo))
+    }
+
+    if (categoriaId) {
+      conditions.push(eq(schema.productos.categoria, categoriaId))
+    }
+
+    if (q && q.trim() !== '') {
+      const search = `%${q.trim()}%`
+      conditions.push(
+        or(
+          ilike(schema.productos.nombre, search),
+          ilike(schema.productos.codigo, search),
+          ilike(schema.productos.codigo_barra, search),
+          ilike(schema.presentaciones.nombre, search),
+          ilike(schema.presentaciones.cod_barra, search)
+        )
+      )
+    }
+
+    let query = db
+      .select({
+        presentacion_id: schema.presentaciones.id,
+        producto_id: schema.productos.id,
+        producto_codigo: schema.productos.codigo,
+        producto_nombre: schema.productos.nombre,
+        es_combo: schema.productos.es_combo,
+        categoria_id: schema.productos.categoria,
+        categoria_nombre: schema.categorias.nombre,
+        presentacion_nombre: schema.presentaciones.nombre,
+        cod_barra: schema.presentaciones.cod_barra,
+        unidad_medida_id: schema.presentaciones.unidad_medida_id,
+        multiplica_por: schema.presentaciones.multiplica_por,
+        precio_costo: schema.presentaciones.precio_costo,
+        precio_venta: schema.presentaciones.precio_venta,
+        precio_mayor: schema.presentaciones.precio_mayor,
+        precio_especial: schema.presentaciones.precio_especial,
+        precio_otros: schema.presentaciones.precio_otros,
+        descuento_predefinido: schema.presentaciones.descuento_predefinido,
+        updated_at: schema.presentaciones.updated_at
+      })
+      .from(schema.presentaciones)
+      .innerJoin(schema.productos, eq(schema.presentaciones.producto_uuid, schema.productos.id))
+      .leftJoin(schema.categorias, eq(schema.productos.categoria, schema.categorias.id))
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions))
+    }
+
+    return query
+      .orderBy(schema.productos.nombre, schema.presentaciones.multiplica_por)
+      .limit(limit)
+      .offset(offset)
+  },
+
+  // Validar existencia y pertenencia multi-tenant de presentaciones en transacción
+  async getPresentacionesParaActualizarTx(tx, presentacionIds = [], { empresaId, esSuperAdmin = false } = {}) {
+    if (!presentacionIds.length) return []
+    const conditions = [inArray(schema.presentaciones.id, presentacionIds)]
+    if (!esSuperAdmin && empresaId) {
+      conditions.push(or(eq(schema.productos.empresa_id, empresaId), sql`${schema.productos.empresa_id} IS NULL`))
+    }
+
+    return tx
+      .select({
+        id: schema.presentaciones.id,
+        producto_uuid: schema.presentaciones.producto_uuid,
+        empresa_id: schema.productos.empresa_id,
+        es_combo: schema.productos.es_combo
+      })
+      .from(schema.presentaciones)
+      .innerJoin(schema.productos, eq(schema.presentaciones.producto_uuid, schema.productos.id))
+      .where(and(...conditions))
+  },
+
+  // Actualizar precios de una presentación dentro de transacción
+  async updatePresentacionPreciosTx(tx, presentacionId, campos) {
+    const [updated] = await tx
+      .update(schema.presentaciones)
+      .set({ ...campos, updated_at: sql`NOW()` })
+      .where(eq(schema.presentaciones.id, presentacionId))
+      .returning()
+    return updated || null
   }
 }
 

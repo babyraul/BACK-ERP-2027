@@ -15,6 +15,43 @@ async function productosRoutes(fastify) {
   // 1. GET /api/productos - Listar catálogo con presentaciones y stock
   fastify.get('/', productosController.listar)
 
+  // 1.1 GET /api/productos/precios - Listar precios por presentación para edición masiva
+  fastify.get('/precios', { config: { permission: 'productos.ver' } }, productosController.listarPrecios)
+
+  // 1.2 PUT /api/productos/precios/masivo - Actualización masiva atómica de precios
+  fastify.put(
+    '/precios/masivo',
+    {
+      config: { permission: 'productos.editar' },
+      schema: {
+        body: {
+          type: 'object',
+          required: ['items'],
+          properties: {
+            items: {
+              type: 'array',
+              minItems: 1,
+              items: {
+                type: 'object',
+                required: ['presentacion_id'],
+                properties: {
+                  presentacion_id: { type: 'string' },
+                  precio_costo: { type: 'number', minimum: 0 },
+                  precio_venta: { type: 'number', minimum: 0 },
+                  precio_mayor: { type: 'number', minimum: 0 },
+                  precio_especial: { type: 'number', minimum: 0 },
+                  precio_otros: { type: 'number', minimum: 0 },
+                  descuento_predefinido: { type: 'number', minimum: 0 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    productosController.actualizarPreciosMasivo
+  )
+
   // 2. GET /api/productos/:id - Detalle de producto y presentaciones
   fastify.get('/:id', productosController.obtenerPorId)
 

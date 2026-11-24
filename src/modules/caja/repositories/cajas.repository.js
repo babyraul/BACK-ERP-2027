@@ -68,6 +68,28 @@ const cajasRepository = {
       .orderBy(schema.caja_serie_correlativo.identificador_caja)
   },
 
+  // Obtener turnos actualmente ABIERTOS en la sucursal para determinar disponibilidad de cada caja física
+  async getTurnosAbiertosSucursal({ branchId, esSuperAdmin = false }) {
+    const conditions = [eq(schema.caja_turnos.estado, 'ABIERTA')]
+    if (!esSuperAdmin && branchId) {
+      conditions.push(eq(schema.caja_turnos.branch_id, branchId))
+    }
+
+    return db
+      .select({
+        id: schema.caja_turnos.id,
+        identificador_caja: schema.caja_turnos.identificador_caja,
+        branch_id: schema.caja_turnos.branch_id,
+        usuario_id: schema.caja_turnos.usuario_id,
+        usuario_nombre: schema.usuarios.nombre,
+        usuario: schema.usuarios.usuario,
+        fecha_apertura: schema.caja_turnos.fecha_apertura
+      })
+      .from(schema.caja_turnos)
+      .leftJoin(schema.usuarios, eq(schema.caja_turnos.usuario_id, schema.usuarios.id))
+      .where(and(...conditions))
+  },
+
   async createSerieCaja(payload) {
     const [nueva] = await db.insert(schema.caja_serie_correlativo).values(payload).returning()
     return nueva
